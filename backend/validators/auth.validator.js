@@ -67,7 +67,7 @@ const resetPassword = {
 
 const changePassword = {
     body: Joi.object({
-        currentPassword: Joi.string().min(1).required(),
+        oldPassword: Joi.string().min(1).required(),
         newPassword: Joi.string().min(6).max(100).required()
             .messages({ "string.min": "New password must be at least 6 characters" }),
     }),
