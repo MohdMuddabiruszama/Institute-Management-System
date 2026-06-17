@@ -6,12 +6,18 @@
 const { Institute, Plan, Student, User, Class } = require("../models");
 const { Op } = require("sequelize");
 
+const getEffectiveLimit = (curr, plan) => {
+    if (curr === -1 || plan === -1) return -1;
+    return Math.max(curr || 0, plan || 0);
+};
+
 const computeFeatures = (institute, plan) => {
     const features = {
         attendance: institute.current_feature_attendance !== 'none' ? institute.current_feature_attendance : plan.feature_attendance,
         auto_attendance: institute.current_feature_auto_attendance !== null ? institute.current_feature_auto_attendance : plan.feature_auto_attendance,
         fees: institute.current_feature_fees !== null ? institute.current_feature_fees : plan.feature_fees,
         finance: institute.current_feature_finance !== null ? institute.current_feature_finance : plan.feature_finance,
+        expenses: institute.current_feature_expenses !== null && institute.current_feature_expenses !== undefined ? institute.current_feature_expenses : (plan.feature_expenses || false),
         salary: institute.current_feature_salary !== null ? institute.current_feature_salary : plan.feature_salary,
         reports: institute.current_feature_reports || plan.feature_reports,
         announcements: institute.current_feature_announcements !== null ? institute.current_feature_announcements : plan.feature_announcements,
@@ -26,8 +32,15 @@ const computeFeatures = (institute, plan) => {
         notes: plan.feature_notes || false,
         chat: plan.feature_chat || false,
         exams: plan.feature_exams || false,
+        performance_hub: institute.current_feature_performance_hub !== null && institute.current_feature_performance_hub !== undefined ? institute.current_feature_performance_hub : (plan.feature_performance_hub || false),
         public_page: institute.current_feature_public_page !== null && institute.current_feature_public_page !== undefined ? institute.current_feature_public_page : (plan.feature_public_page || false),
-        mobile_app: institute.current_feature_mobile_app !== null && institute.current_feature_mobile_app !== undefined ? institute.current_feature_mobile_app : (plan.feature_mobile_app || false)
+        mobile_app: institute.current_feature_mobile_app !== null && institute.current_feature_mobile_app !== undefined ? institute.current_feature_mobile_app : (plan.feature_mobile_app || false),
+        // ── New features from Update_Plans.md spec ──
+        scan_qr:              plan.feature_scan_qr              || false,
+        faculty_attendance:   plan.feature_faculty_attendance   || false,
+        faculty_tracker:      plan.feature_faculty_tracker      || false,
+        biometric:            plan.feature_biometric            || false,
+        performance_analytics: plan.feature_performance_analytics || plan.feature_performance_hub || false,
     };
 
     let expiries = {};
@@ -78,7 +91,7 @@ const checkStudentLimit = async (req, res, next) => {
         });
 
         // Determine limit (Snapshot first, then Plan fallback)
-        const limit_students = institute.current_limit_students || institute.Plan.max_students;
+        const limit_students = getEffectiveLimit(institute.current_limit_students, institute.Plan.max_students);
 
         // -1 = unlimited (lifetime override)
         if (limit_students !== -1 && studentCount >= limit_students) {
@@ -133,7 +146,7 @@ const checkFacultyLimit = async (req, res, next) => {
             }
         });
 
-        const limit_faculty = institute.current_limit_faculty || institute.Plan.max_faculty;
+        const limit_faculty = getEffectiveLimit(institute.current_limit_faculty, institute.Plan.max_faculty);
 
         // -1 = unlimited
         if (limit_faculty !== -1 && facultyCount >= limit_faculty) {
@@ -182,7 +195,7 @@ const checkClassLimit = async (req, res, next) => {
             where: { institute_id }
         });
 
-        const limit_classes = institute.current_limit_classes || institute.Plan.max_classes;
+        const limit_classes = getEffectiveLimit(institute.current_limit_classes, institute.Plan.max_classes);
 
         if (classCount >= limit_classes) {
             if (req.method === 'GET') return next();
@@ -236,7 +249,7 @@ const checkAdminUserLimit = async (req, res, next) => {
             }
         });
 
-        const limit_admins = institute.current_limit_admins || institute.Plan.max_admin_users;
+        const limit_admins = getEffectiveLimit(institute.current_limit_admins, institute.Plan.max_admin_users);
 
         // -1 = unlimited
         if (limit_admins !== -1 && adminCount >= limit_admins) {
@@ -321,6 +334,9 @@ const checkFeatureAccess = (featureName) => {
                 case 'fees':
                     hasAccess = features.fees === true;
                     break;
+                case 'expenses':
+                    hasAccess = features.expenses === true;
+                    break;
                 case 'reports':
                     hasAccess = features.reports !== 'none';
                     break;
@@ -360,8 +376,27 @@ const checkFeatureAccess = (featureName) => {
                 case 'exams':
                     hasAccess = features.exams === true;
                     break;
+                case 'performance_hub':
+                    hasAccess = features.performance_hub === true;
+                    break;
+                case 'performance_analytics':
+                    hasAccess = features.performance_analytics === true;
+                    break;
                 case 'public_page':
                     hasAccess = features.public_page === true;
+                    break;
+                // ── New features (Update_Plans.md spec) ──
+                case 'scan_qr':
+                    hasAccess = features.scan_qr === true;
+                    break;
+                case 'faculty_attendance':
+                    hasAccess = features.faculty_attendance === true;
+                    break;
+                case 'faculty_tracker':
+                    hasAccess = features.faculty_tracker === true;
+                    break;
+                case 'biometric':
+                    hasAccess = features.biometric === true;
                     break;
                 default:
                     hasAccess = true; // Unknown features are allowed by default
@@ -415,10 +450,10 @@ const getUsageStats = async (req, res) => {
         ]);
 
         // Determine limits (Snapshot first, then Plan fallback; -1 = unlimited)
-        const limit_students = institute.current_limit_students || institute.Plan.max_students;
-        const limit_faculty = institute.current_limit_faculty || institute.Plan.max_faculty;
-        const limit_classes = institute.current_limit_classes || institute.Plan.max_classes;
-        const limit_admins = institute.current_limit_admins || institute.Plan.max_admin_users;
+        const limit_students = getEffectiveLimit(institute.current_limit_students, institute.Plan.max_students);
+        const limit_faculty = getEffectiveLimit(institute.current_limit_faculty, institute.Plan.max_faculty);
+        const limit_classes = getEffectiveLimit(institute.current_limit_classes, institute.Plan.max_classes);
+        const limit_admins = getEffectiveLimit(institute.current_limit_admins, institute.Plan.max_admin_users);
 
         // Helper: safe percentage (handles -1 unlimited)
         const safePct = (cur, lim) => lim === -1 ? 0 : Math.round((cur / lim) * 100);

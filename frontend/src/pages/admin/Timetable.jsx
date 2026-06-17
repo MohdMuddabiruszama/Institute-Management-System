@@ -1,9 +1,50 @@
 import { useState, useEffect } from "react";
 import api from "../../services/api";
-import "./Dashboard.css"; // Reuse dashboard UI
-import "../../components/common/Buttons.css";
+import "./AdminTimetable.css";
+
+const CalendarIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+);
+const ClockIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+);
+const PlusIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+);
+const InfoIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6366F1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+);
+const PrinterIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+);
+const ArrowLeftIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+);
+const CloseIcon = () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+);
+const GripIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="12" r="1"></circle><circle cx="9" cy="5" r="1"></circle><circle cx="9" cy="19" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="15" cy="5" r="1"></circle><circle cx="15" cy="19" r="1"></circle></svg>
+);
+const TrashIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+);
+const EditIcon = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+);
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function formatAMPM(timeString) {
+    if (!timeString) return "";
+    let [hours, minutes] = timeString.split(':');
+    hours = parseInt(hours);
+    let ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12; // the hour '0' should be '12'
+    let strTime = hours.toString().padStart(2, '0') + ':' + minutes + ' ' + ampm;
+    return strTime;
+}
 
 function AdminTimetable() {
     const [loading, setLoading] = useState(true);
@@ -18,6 +59,17 @@ function AdminTimetable() {
     // Modal States
     const [showSlotModal, setShowSlotModal] = useState(false);
     const [showEntryModal, setShowEntryModal] = useState(false);
+    const [showEditModal, setShowEditModal] = useState(false);
+    const [editingEntry, setEditingEntry] = useState(null);
+    const [editForm, setEditForm] = useState({
+        day_of_week: "Monday",
+        slot_id: "",
+        subject_id: "",
+        faculty_id: "",
+        room_number: "",
+        is_break: false,
+        break_label: "Break"
+    });
 
     // Form States
     const [slotForm, setSlotForm] = useState({ start_time: "", end_time: "" });
@@ -26,7 +78,9 @@ function AdminTimetable() {
         slot_id: "",
         subject_id: "",
         faculty_id: "",
-        room_number: ""
+        room_number: "",
+        is_break: false,
+        break_label: "Break"
     });
 
     useEffect(() => {
@@ -35,26 +89,26 @@ function AdminTimetable() {
 
     useEffect(() => {
         if (selectedClass) {
-            fetchTimetable(selectedClass);
+            fetchTimetableAndSlots(selectedClass);
         } else {
             setTimetable([]);
+            setSlots([]);
         }
     }, [selectedClass]);
 
     const fetchInitialData = async () => {
         setLoading(true);
         try {
-            const [classesRes, subjectsRes, facultyRes, slotsRes] = await Promise.all([
-                api.get("/classes"),
-                api.get("/subjects"), // Requires an endpoint that fetches all subjects
-                api.get("/faculty"),
-                api.get("/timetable/slots")
+            const ts = new Date().getTime();
+            const [classesRes, subjectsRes, facultyRes] = await Promise.all([
+                api.get(`/classes?limit=500&t=${ts}`),
+                api.get(`/subjects?limit=500&t=${ts}`),
+                api.get(`/faculty?limit=500&t=${ts}`)
             ]);
 
             setClasses(classesRes.data.data || []);
             setSubjects(subjectsRes.data.data || []);
             setFaculty(facultyRes.data.data || []);
-            setSlots(slotsRes.data.data || []);
         } catch (error) {
             console.error("Error fetching initial data", error);
         } finally {
@@ -62,12 +116,17 @@ function AdminTimetable() {
         }
     };
 
-    const fetchTimetable = async (classId) => {
+    const fetchTimetableAndSlots = async (classId) => {
         try {
-            const response = await api.get(`/timetable/class/${classId}`);
-            setTimetable(response.data.data || []);
+            const ts = new Date().getTime();
+            const [timetableRes, slotsRes] = await Promise.all([
+                api.get(`/timetable/class/${classId}?t=${ts}`),
+                api.get(`/timetable/slots?class_id=${classId}&t=${ts}`)
+            ]);
+            setTimetable(timetableRes.data.data || []);
+            setSlots(slotsRes.data.data || []);
         } catch (error) {
-            console.error("Error fetching timetable", error);
+            console.error("Error fetching class data", error);
         }
     };
 
@@ -75,7 +134,10 @@ function AdminTimetable() {
     const handleSlotSubmit = async (e) => {
         e.preventDefault();
         try {
-            const res = await api.post("/timetable/slots", slotForm);
+            const res = await api.post("/timetable/slots", {
+                ...slotForm,
+                class_id: selectedClass
+            });
             if (res.data.success) {
                 alert("Time Slot added successfully!");
                 setSlots([...slots, res.data.data]);
@@ -104,15 +166,22 @@ function AdminTimetable() {
     // --- ENTRY LOGIC ---
     const handleEntrySubmit = async (e) => {
         e.preventDefault();
+        // Validate required fields
+        if (!entryForm.is_break && !entryForm.subject_id) {
+            alert("Please select a Subject or mark this as a Break period.");
+            return;
+        }
         try {
-            const res = await api.post("/timetable", {
+            const payload = {
                 ...entryForm,
                 class_id: selectedClass
-            });
+            };
+            const res = await api.post("/timetable", payload);
             if (res.data.success) {
-                alert("Timetable entry added!");
-                fetchTimetable(selectedClass);
+                alert(entryForm.is_break ? "Break period added!" : "Timetable entry added!");
+                fetchTimetableAndSlots(selectedClass);
                 setShowEntryModal(false);
+                setEntryForm({ day_of_week: "Monday", slot_id: "", subject_id: "", faculty_id: "", room_number: "", is_break: false, break_label: "Break" });
             }
         } catch (error) {
             console.error("Error adding entry:", error);
@@ -133,110 +202,212 @@ function AdminTimetable() {
         }
     };
 
+    const handleEditEntry = (entry) => {
+        setEditingEntry(entry);
+        setEditForm({
+            day_of_week: entry.day_of_week,
+            slot_id: entry.slot_id,
+            subject_id: entry.subject_id || "",
+            faculty_id: entry.faculty_id || "",
+            room_number: entry.room_number || "",
+            is_break: entry.is_break || false,
+            break_label: entry.break_label || "Break"
+        });
+        setShowEditModal(true);
+    };
+
+    const handleEditSubmit = async (e) => {
+        e.preventDefault();
+        if (!editForm.is_break && !editForm.subject_id) {
+            alert("Please select a Subject or mark this as a Break period.");
+            return;
+        }
+        try {
+            const payload = { ...editForm, class_id: selectedClass };
+            const res = await api.put(`/timetable/${editingEntry.id}`, payload);
+            if (res.data.success) {
+                alert("Timetable entry updated!");
+                fetchTimetableAndSlots(selectedClass);
+                setShowEditModal(false);
+                setEditingEntry(null);
+            }
+        } catch (error) {
+            console.error("Error updating entry:", error);
+            alert(error.response?.data?.message || "Failed to update timetable entry.");
+        }
+    };
+
     if (loading) {
-        return <div className="dashboard-container">Loading Timetable...</div>;
+        return <div className="ap-timetable-wrapper">Loading Timetable...</div>;
     }
 
     return (
-        <div className="dashboard-container">
-            <div className="dashboard-header">
-                <div>
-                    <h1>📅 Weekly Timetable</h1>
-                    <p>Class schedule management</p>
+        <div className="ap-timetable-wrapper">
+            <div className="ap-tt-header">
+                <div className="ap-tt-title-group">
+                    <div className="ap-tt-icon-bg">
+                        <CalendarIcon />
+                    </div>
+                    <div>
+                        <h1 className="ap-tt-title">Weekly Timetable</h1>
+                        <p className="ap-tt-subtitle">Class schedule management</p>
+                    </div>
                 </div>
-                <div className="dashboard-header-right" style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                    <button className="animated-btn secondary" onClick={() => setShowSlotModal(true)}>
-                        <span className="icon">⏱️</span> Manage Time Slots
+                <div className="ap-tt-actions">
+                    <button className="ap-btn-white" onClick={() => {
+                        if (!selectedClass) {
+                            alert("Please select a class first to manage its time slots!");
+                            return;
+                        }
+                        setShowSlotModal(true);
+                    }}>
+                        <ClockIcon /> Manage Time Slots
                     </button>
-                    <button className="animated-btn primary" onClick={() => {
+                    <button className="ap-btn-purple" onClick={() => {
                         if (!selectedClass) {
                             alert("Please select a class first!");
                             return;
                         }
                         setShowEntryModal(true);
                     }}>
-                        <span className="icon">➕</span> Assign Subject
+                        <PlusIcon /> Assign Subject
                     </button>
-                    <button className="animated-btn secondary" onClick={() => window.location.href = "/admin/dashboard"}>
-                        <span className="icon icon-back">←</span> Back to Dashboard
+                    <button className="ap-btn-white" onClick={() => window.location.href = "/admin/dashboard"}>
+                        <ArrowLeftIcon /> Back to Dashboard
                     </button>
                 </div>
             </div>
 
-            <div className="filter-container" style={{ marginBottom: "2rem" }}>
-                <span className="filter-label">Select Class Schedule:</span>
-                <select
-                    className="form-select"
-                    style={{ width: "250px", margin: 0 }}
-                    value={selectedClass}
-                    onChange={(e) => setSelectedClass(e.target.value)}
-                >
-                    <option value="">-- Choose Class --</option>
-                    {classes.map(cls => (
-                        <option key={cls.id} value={cls.id}>
-                            {cls.name} {cls.section ? `- ${cls.section}` : ''}
-                        </option>
-                    ))}
-                </select>
+            <div className="ap-tt-filters">
+                <div className="ap-tt-filter-left">
+                    <span className="ap-tt-filter-label">Select Class Schedule</span>
+                    <select
+                        className="ap-tt-select"
+                        value={selectedClass}
+                        onChange={(e) => setSelectedClass(e.target.value)}
+                    >
+                        <option value="">-- Choose Class --</option>
+                        {classes.map(cls => (
+                            <option key={cls.id} value={cls.id}>
+                                {cls.name} {cls.section ? `- ${cls.section}` : ''}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+                <div>
+                    <button className="ap-btn-white" onClick={() => window.print()}>
+                        <PrinterIcon /> View / Print
+                    </button>
+                </div>
             </div>
 
             {selectedClass ? (
                 slots.length === 0 ? (
-                    <div className="card" style={{ padding: "2rem", textAlign: "center" }}>
+                    <div className="ap-tt-grid-card" style={{ padding: "3rem", textAlign: "center" }}>
                         <h3>No Time Slots Available</h3>
-                        <p style={{ color: "var(--text-secondary)" }}>Please create time slots first before assigning subjects to the timetable.</p>
+                        <p style={{ color: "#64748B" }}>Please create time slots first before assigning subjects to the timetable.</p>
                     </div>
                 ) : (
-                    <div className="card" style={{ overflowX: "auto" }}>
-                        <table className="table timetable-table mobile-keep" style={{ minWidth: "800px" }}>
+                    <div className="ap-printable-area">
+                        <div className="ap-print-only-header">
+                            <h2>Class Timetable: {classes.find(c => c.id.toString() === selectedClass.toString())?.name} {classes.find(c => c.id.toString() === selectedClass.toString())?.section ? `- ${classes.find(c => c.id.toString() === selectedClass.toString())?.section}` : ''}</h2>
+                        </div>
+                        <div className="ap-tt-grid-card">
+                            <table className="ap-tt-table">
                             <thead>
                                 <tr>
-                                    <th style={{ width: "120px" }}></th>
+                                    <th style={{ width: "140px", textAlign: "left" }}>PERIOD / TIME</th>
                                     {DAYS_OF_WEEK.map(day => (
-                                        <th key={day} style={{ textAlign: "center", background: '#f8fafc', borderRadius: '12px' }}>{day}</th>
+                                        <th key={day}>{day}</th>
                                     ))}
                                 </tr>
                             </thead>
                             <tbody>
                                 {slots.map((slot, idx) => (
                                     <tr key={slot.id}>
-                                        <td className="time-slot-label">
-                                            <strong>Period {idx + 1}</strong>
-                                            <span>{slot.start_time.slice(0, 5)} - {slot.end_time.slice(0, 5)}</span>
+                                        <td>
+                                            <div className="ap-tt-time-col">
+                                                <div className="ap-tt-period-name">Period {idx + 1}</div>
+                                                <div className="ap-tt-time-range">
+                                                    <ClockIcon />
+                                                    {formatAMPM(slot.start_time)} - {formatAMPM(slot.end_time)}
+                                                </div>
+                                            </div>
                                         </td>
                                         {DAYS_OF_WEEK.map(day => {
                                             const entry = timetable.find(t => t.slot_id === slot.id && t.day_of_week === day);
 
-                                            // Determine pill color consistently by subject ID or fallback to standard array loop
-                                            let colorClass = "pill-color-0";
-                                            if (entry && entry.subject_id) {
-                                                colorClass = `pill-color-${entry.subject_id % 7}`;
+                                            let themeClass = "tt-theme-6";
+                                            if (entry && entry.Subject?.name) {
+                                                const name = entry.Subject.name.toLowerCase();
+                                                if (name.includes('english')) themeClass = 'tt-theme-0';
+                                                else if (name.includes('math')) themeClass = 'tt-theme-1';
+                                                else if (name.includes('science') || name.includes('bio') || name.includes('evs')) themeClass = 'tt-theme-2';
+                                                else if (name.includes('physics') || name.includes('computer') || name.includes('it')) themeClass = 'tt-theme-3';
+                                                else if (name.includes('chem') || name.includes('history') || name.includes('social')) themeClass = 'tt-theme-4';
+                                                else if (name.includes('hindi') || name.includes('geography')) themeClass = 'tt-theme-5';
+                                                else themeClass = `tt-theme-${(entry.subject_id || 0) % 6}`;
                                             }
 
                                             return (
                                                 <td key={`${slot.id}-${day}`}>
                                                     {entry ? (
-                                                        <div className={`timetable-pill ${colorClass}`}>
-                                                            <span style={{ fontWeight: 600 }}>{entry.Subject?.name}</span>
-                                                            <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: "4px" }}>
+                                                        entry.is_break ? (
+                                                            <div className="ap-tt-cell tt-break-cell">
+                                                                <div className="ap-tt-subject tt-break-label">
+                                                                    ☕ {entry.break_label || 'Break'}
+                                                                </div>
+                                                                <div className="ap-tt-action-btns">
+                                                                    <button
+                                                                        className="ap-tt-edit-btn"
+                                                                        onClick={() => handleEditEntry(entry)}
+                                                                        title="Edit Break"
+                                                                    >
+                                                                        <EditIcon />
+                                                                    </button>
+                                                                    <button
+                                                                        className="ap-tt-delete-btn"
+                                                                        onClick={() => handleDeleteEntry(entry.id)}
+                                                                        title="Remove Break"
+                                                                    >
+                                                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                        <div className={`ap-tt-cell ${themeClass}`}>
+                                                            <div className="ap-tt-subject">{entry.Subject?.name}</div>
+                                                            <div className="ap-tt-faculty">
                                                                 {entry.Faculty?.User?.name}
                                                             </div>
                                                             {entry.room_number && (
-                                                                <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "3px", fontWeight: 500 }}>
-                                                                    🚪 Room {entry.room_number}
+                                                                <div className="ap-tt-room">
+                                                                    <div className="ap-tt-room-icon"></div>
+                                                                    Room {entry.room_number}
                                                                 </div>
                                                             )}
-                                                            <button
-                                                                onClick={() => handleDeleteEntry(entry.id)}
-                                                                style={{ position: "absolute", top: "2px", right: "2px", background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: "1rem", opacity: 0.5 }}
-                                                                title="Remove"
-                                                            >
-                                                                &times;
-                                                            </button>
+                                                            <div className="ap-tt-action-btns">
+                                                                <button
+                                                                    className="ap-tt-edit-btn"
+                                                                    onClick={() => handleEditEntry(entry)}
+                                                                    title="Edit Entry"
+                                                                >
+                                                                    <EditIcon />
+                                                                </button>
+                                                                <button
+                                                                    className="ap-tt-delete-btn"
+                                                                    onClick={() => handleDeleteEntry(entry.id)}
+                                                                    title="Remove Entry"
+                                                                >
+                                                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                                                </button>
+                                                            </div>
                                                         </div>
+                                                        )
                                                     ) : (
-                                                        <div className="timetable-pill" style={{ backgroundColor: 'transparent', border: '1px dashed var(--border-color)', color: 'var(--text-muted)' }}>
-                                                            -
+                                                        <div className="ap-tt-cell-empty">
+                                                            <CalendarIcon />
+                                                            No Class
                                                         </div>
                                                     )}
                                                 </td>
@@ -246,6 +417,11 @@ function AdminTimetable() {
                                 ))}
                             </tbody>
                         </table>
+                        <div className="ap-tt-footer-info">
+                            <InfoIcon />
+                            <span>Timetable is effective from {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                        </div>
+                    </div>
                     </div>
                 )
             ) : (
@@ -256,94 +432,265 @@ function AdminTimetable() {
 
             {/* Time Slot Modal */}
             {showSlotModal && (
-                <div className="modal-overlay">
-                    <div className="modal-content" style={{ maxWidth: '500px' }}>
-                        <h2 style={{ marginBottom: "1.5rem", borderBottom: "1px solid var(--border-color)", paddingBottom: "1rem" }}>Manage Time Slots</h2>
-
-                        <div style={{ marginBottom: "2rem" }}>
-                            <h4>Existing Slots</h4>
-                            {slots.length === 0 ? <p>No slots defined yet.</p> : (
-                                <ul style={{ listStyle: "none", padding: 0, marginTop: "0.5rem" }}>
-                                    {slots.map(s => (
-                                        <li key={s.id} style={{ display: "flex", justifyContent: "space-between", padding: "0.5rem", borderBottom: "1px solid var(--border-color)" }}>
-                                            <span>{s.start_time.slice(0, 5)} - {s.end_time.slice(0, 5)}</span>
-                                            <button onClick={() => handleDeleteSlot(s.id)} style={{ color: "#ef4444", background: "none", border: "none", cursor: "pointer" }}>Delete</button>
-                                        </li>
-                                    ))}
-                                </ul>
-                            )}
+                <div className="tt-modal-overlay">
+                    <div className="tt-modal-content">
+                        <div className="tt-modal-header">
+                            <div className="tt-modal-header-left">
+                                <div className="tt-modal-icon">
+                                    <ClockIcon />
+                                </div>
+                                <div>
+                                    <h2 className="tt-modal-title">Manage Time Slots</h2>
+                                    <p className="tt-modal-subtitle">Create, edit and manage class time slots</p>
+                                </div>
+                            </div>
+                            <button className="tt-modal-close" onClick={() => setShowSlotModal(false)}>
+                                <CloseIcon />
+                            </button>
                         </div>
 
-                        <form onSubmit={handleSlotSubmit} className="form-grid">
-                            <div className="form-group">
-                                <label className="form-label">Start Time</label>
-                                <input type="time" className="form-input" value={slotForm.start_time} onChange={(e) => setSlotForm({ ...slotForm, start_time: e.target.value })} required />
+                        <div className="tt-modal-body">
+                            <div>
+                                <div className="tt-section-title">Existing Time Slots</div>
+                                {slots.length === 0 ? <p style={{color: '#64748B', fontSize: '0.9rem'}}>No slots defined yet.</p> : (
+                                    <div className="tt-slot-list">
+                                        {slots.map(s => (
+                                            <div key={s.id} className="tt-slot-item">
+                                                <div className="tt-slot-item-left">
+                                                    <GripIcon />
+                                                    {formatAMPM(s.start_time)} - {formatAMPM(s.end_time)}
+                                                </div>
+                                                <button className="tt-btn-delete-slot" onClick={() => handleDeleteSlot(s.id)}>
+                                                    <TrashIcon />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
-                            <div className="form-group">
-                                <label className="form-label">End Time</label>
-                                <input type="time" className="form-input" value={slotForm.end_time} onChange={(e) => setSlotForm({ ...slotForm, end_time: e.target.value })} required />
-                            </div>
-                            <div className="form-actions" style={{ gridColumn: "1 / -1", marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--border-color)" }}>
-                                <button type="button" className="btn btn-secondary" onClick={() => setShowSlotModal(false)}>Close</button>
-                                <button type="submit" className="btn btn-primary">Add Time Slot</button>
-                            </div>
-                        </form>
+
+                            <form id="slotForm" onSubmit={handleSlotSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <div className="tt-section-title">Add New Time Slot</div>
+                                <div className="tt-form-group">
+                                    <label className="tt-form-label">Start Time <span>*</span></label>
+                                    <input type="time" className="tt-input" value={slotForm.start_time} onChange={(e) => setSlotForm({ ...slotForm, start_time: e.target.value })} required />
+                                </div>
+                                <div className="tt-form-group">
+                                    <label className="tt-form-label">End Time <span>*</span></label>
+                                    <input type="time" className="tt-input" value={slotForm.end_time} onChange={(e) => setSlotForm({ ...slotForm, end_time: e.target.value })} required />
+                                </div>
+                            </form>
+                        </div>
+                        <div className="tt-modal-footer">
+                            <button type="button" className="ap-btn-white" onClick={() => setShowSlotModal(false)}>Cancel</button>
+                            <button type="submit" form="slotForm" className="ap-btn-purple">Add Time Slot</button>
+                        </div>
                     </div>
                 </div>
             )}
 
             {/* Entry Assignment Modal */}
             {showEntryModal && (
-                <div className="modal-overlay">
-                    <div className="modal-content" style={{ maxWidth: '500px' }}>
-                        <h2 style={{ marginBottom: "1.5rem", borderBottom: "1px solid var(--border-color)", paddingBottom: "1rem" }}>Assign Subject to Timetable</h2>
+                <div className="tt-modal-overlay">
+                    <div className="tt-modal-content">
+                        <div className="tt-modal-header">
+                            <div className="tt-modal-header-left">
+                                <div className="tt-modal-icon">
+                                    <CalendarIcon />
+                                </div>
+                                <div>
+                                    <h2 className="tt-modal-title">Assign Subject to Timetable</h2>
+                                    <p className="tt-modal-subtitle">Assign a subject, faculty and room to the selected time slot</p>
+                                </div>
+                            </div>
+                            <button className="tt-modal-close" onClick={() => setShowEntryModal(false)}>
+                                <CloseIcon />
+                            </button>
+                        </div>
 
-                        <form onSubmit={handleEntrySubmit} className="form-grid">
-                            <div className="form-group">
-                                <label className="form-label">Day of Week</label>
-                                <select className="form-select" value={entryForm.day_of_week} onChange={(e) => setEntryForm({ ...entryForm, day_of_week: e.target.value })} required>
-                                    {DAYS_OF_WEEK.map(d => <option key={d} value={d}>{d}</option>)}
-                                </select>
-                            </div>
-                            <div className="form-group">
-                                <label className="form-label">Time Slot</label>
-                                <select className="form-select" value={entryForm.slot_id} onChange={(e) => setEntryForm({ ...entryForm, slot_id: e.target.value })} required>
-                                    <option value="">-- Choose Time --</option>
-                                    {slots.map(s => <option key={s.id} value={s.id}>{s.start_time.slice(0, 5)} - {s.end_time.slice(0, 5)}</option>)}
-                                </select>
-                            </div>
-                            <div className="form-group" style={{ gridColumn: "1 / -1" }}>
-                                <label className="form-label">Subject</label>
-                                <select className="form-select" value={entryForm.subject_id} onChange={(e) => {
-                                    const subjectId = e.target.value;
-                                    const selectedSubject = subjects.find(s => s.id.toString() === subjectId);
-                                    let autoFacultyId = entryForm.faculty_id;
-                                    if (selectedSubject && selectedSubject.faculty_id) {
-                                        autoFacultyId = selectedSubject.faculty_id;
-                                    }
-                                    setEntryForm({ ...entryForm, subject_id: subjectId, faculty_id: autoFacultyId });
-                                }} required>
-                                    <option value="">-- Select Subject --</option>
-                                    {subjects.filter(sub => sub.class_id.toString() === selectedClass.toString()).map(sub => <option key={sub.id} value={sub.id}>{sub.name}</option>)}
-                                </select>
-                            </div>
-                            <div className="form-group" style={{ gridColumn: "1 / -1" }}>
-                                <label className="form-label">Faculty</label>
-                                <select className="form-select" value={entryForm.faculty_id} onChange={(e) => setEntryForm({ ...entryForm, faculty_id: e.target.value })} required>
-                                    <option value="">-- Select Faculty --</option>
-                                    {faculty.map(f => <option key={f.id} value={f.id}>{f.User?.name}</option>)}
-                                </select>
-                            </div>
-                            <div className="form-group" style={{ gridColumn: "1 / -1" }}>
-                                <label className="form-label">Room Number (Optional)</label>
-                                <input type="text" className="form-input" placeholder="e.g. 101" value={entryForm.room_number} onChange={(e) => setEntryForm({ ...entryForm, room_number: e.target.value })} />
-                            </div>
+                        <div className="tt-modal-body">
+                            <form id="entryForm" onSubmit={handleEntrySubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <div className="tt-form-group">
+                                    <label className="tt-form-label">Day of Week <span>*</span></label>
+                                    <select className="tt-input" value={entryForm.day_of_week} onChange={(e) => setEntryForm({ ...entryForm, day_of_week: e.target.value })} required>
+                                        {DAYS_OF_WEEK.map(d => <option key={d} value={d}>{d}</option>)}
+                                    </select>
+                                </div>
+                                <div className="tt-form-group">
+                                    <label className="tt-form-label">Time Slot <span>*</span></label>
+                                    <select className="tt-input" value={entryForm.slot_id} onChange={(e) => setEntryForm({ ...entryForm, slot_id: e.target.value })} required>
+                                        <option value="">-- Choose Time --</option>
+                                        {slots.map(s => <option key={s.id} value={s.id}>{formatAMPM(s.start_time)} - {formatAMPM(s.end_time)}</option>)}
+                                    </select>
+                                </div>
 
-                            <div className="form-actions" style={{ gridColumn: "1 / -1", marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--border-color)" }}>
-                                <button type="button" className="btn btn-secondary" onClick={() => setShowEntryModal(false)}>Cancel</button>
-                                <button type="submit" className="btn btn-primary">Assign Class</button>
+                                {/* Break Toggle */}
+                                <div className="tt-break-toggle-row">
+                                    <label className="tt-break-toggle-label">
+                                        <input
+                                            type="checkbox"
+                                            checked={entryForm.is_break}
+                                            onChange={(e) => setEntryForm({ ...entryForm, is_break: e.target.checked, subject_id: '', faculty_id: '', room_number: '' })}
+                                            className="tt-break-checkbox"
+                                        />
+                                        <span className="tt-break-toggle-text">☕ Mark as Break Period</span>
+                                    </label>
+                                    <span className="tt-break-toggle-hint">e.g. Lunch Break, Recess</span>
+                                </div>
+
+                                {entryForm.is_break ? (
+                                    <div className="tt-form-group">
+                                        <label className="tt-form-label">Break Label</label>
+                                        <input
+                                            type="text"
+                                            className="tt-input"
+                                            placeholder="e.g. Lunch Break, Recess, Short Break"
+                                            value={entryForm.break_label}
+                                            onChange={(e) => setEntryForm({ ...entryForm, break_label: e.target.value })}
+                                        />
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="tt-form-group">
+                                            <label className="tt-form-label">Subject <span>*</span></label>
+                                            <select className="tt-input" value={entryForm.subject_id} onChange={(e) => {
+                                                const subjectId = e.target.value;
+                                                const selectedSubject = subjects.find(s => s.id.toString() === subjectId);
+                                                let autoFacultyId = entryForm.faculty_id;
+                                                if (selectedSubject && selectedSubject.faculty_id) {
+                                                    autoFacultyId = selectedSubject.faculty_id;
+                                                }
+                                                setEntryForm({ ...entryForm, subject_id: subjectId, faculty_id: autoFacultyId });
+                                            }} required>
+                                                <option value="">-- Select Subject --</option>
+                                                {subjects.filter(sub => sub.class_id && sub.class_id.toString() === selectedClass.toString()).map(sub => <option key={sub.id} value={sub.id}>{sub.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="tt-form-group">
+                                            <label className="tt-form-label">Faculty <span>*</span></label>
+                                            <select className="tt-input" value={entryForm.faculty_id} onChange={(e) => setEntryForm({ ...entryForm, faculty_id: e.target.value })} required>
+                                                <option value="">-- Select Faculty --</option>
+                                                {faculty.map(f => <option key={f.id} value={f.id}>{f.User?.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="tt-form-group">
+                                            <label className="tt-form-label">Room Number (Optional)</label>
+                                            <input type="text" className="tt-input" placeholder="e.g. 101" value={entryForm.room_number} onChange={(e) => setEntryForm({ ...entryForm, room_number: e.target.value })} />
+                                        </div>
+                                    </>
+                                )}
+                            </form>
+                        </div>
+                        
+                        <div className="tt-modal-footer">
+                            <button type="button" className="ap-btn-white" onClick={() => setShowEntryModal(false)}>Cancel</button>
+                            <button type="submit" form="entryForm" className={entryForm.is_break ? "ap-btn-break" : "ap-btn-purple"}>
+                                {entryForm.is_break ? '☕ Add Break' : <><PlusIcon /> Assign Class</>}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Edit Entry Modal */}
+            {showEditModal && editingEntry && (
+                <div className="tt-modal-overlay">
+                    <div className="tt-modal-content">
+                        <div className="tt-modal-header">
+                            <div className="tt-modal-header-left">
+                                <div className="tt-modal-icon tt-modal-icon-edit">
+                                    <EditIcon />
+                                </div>
+                                <div>
+                                    <h2 className="tt-modal-title">Edit Timetable Entry</h2>
+                                    <p className="tt-modal-subtitle">Update subject, faculty, or room for this slot</p>
+                                </div>
                             </div>
-                        </form>
+                            <button className="tt-modal-close" onClick={() => { setShowEditModal(false); setEditingEntry(null); }}>
+                                <CloseIcon />
+                            </button>
+                        </div>
+
+                        <div className="tt-modal-body">
+                            <form id="editEntryForm" onSubmit={handleEditSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <div className="tt-form-group">
+                                    <label className="tt-form-label">Day of Week <span>*</span></label>
+                                    <select className="tt-input" value={editForm.day_of_week} onChange={(e) => setEditForm({ ...editForm, day_of_week: e.target.value })} required>
+                                        {DAYS_OF_WEEK.map(d => <option key={d} value={d}>{d}</option>)}
+                                    </select>
+                                </div>
+                                <div className="tt-form-group">
+                                    <label className="tt-form-label">Time Slot <span>*</span></label>
+                                    <select className="tt-input" value={editForm.slot_id} onChange={(e) => setEditForm({ ...editForm, slot_id: e.target.value })} required>
+                                        <option value="">-- Choose Time --</option>
+                                        {slots.map(s => <option key={s.id} value={s.id}>{formatAMPM(s.start_time)} - {formatAMPM(s.end_time)}</option>)}
+                                    </select>
+                                </div>
+
+                                {/* Break Toggle */}
+                                <div className="tt-break-toggle-row">
+                                    <label className="tt-break-toggle-label">
+                                        <input
+                                            type="checkbox"
+                                            checked={editForm.is_break}
+                                            onChange={(e) => setEditForm({ ...editForm, is_break: e.target.checked, subject_id: '', faculty_id: '', room_number: '' })}
+                                            className="tt-break-checkbox"
+                                        />
+                                        <span className="tt-break-toggle-text">☕ Mark as Break Period</span>
+                                    </label>
+                                    <span className="tt-break-toggle-hint">e.g. Lunch Break, Recess</span>
+                                </div>
+
+                                {editForm.is_break ? (
+                                    <div className="tt-form-group">
+                                        <label className="tt-form-label">Break Label</label>
+                                        <input
+                                            type="text"
+                                            className="tt-input"
+                                            placeholder="e.g. Lunch Break, Recess, Short Break"
+                                            value={editForm.break_label}
+                                            onChange={(e) => setEditForm({ ...editForm, break_label: e.target.value })}
+                                        />
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="tt-form-group">
+                                            <label className="tt-form-label">Subject <span>*</span></label>
+                                            <select className="tt-input" value={editForm.subject_id} onChange={(e) => {
+                                                const subjectId = e.target.value;
+                                                const selectedSubject = subjects.find(s => s.id.toString() === subjectId);
+                                                let autoFacultyId = editForm.faculty_id;
+                                                if (selectedSubject && selectedSubject.faculty_id) {
+                                                    autoFacultyId = selectedSubject.faculty_id;
+                                                }
+                                                setEditForm({ ...editForm, subject_id: subjectId, faculty_id: autoFacultyId });
+                                            }} required>
+                                                <option value="">-- Select Subject --</option>
+                                                {subjects.filter(sub => sub.class_id && sub.class_id.toString() === selectedClass.toString()).map(sub => <option key={sub.id} value={sub.id}>{sub.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="tt-form-group">
+                                            <label className="tt-form-label">Faculty <span>*</span></label>
+                                            <select className="tt-input" value={editForm.faculty_id} onChange={(e) => setEditForm({ ...editForm, faculty_id: e.target.value })} required>
+                                                <option value="">-- Select Faculty --</option>
+                                                {faculty.map(f => <option key={f.id} value={f.id}>{f.User?.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="tt-form-group">
+                                            <label className="tt-form-label">Room Number (Optional)</label>
+                                            <input type="text" className="tt-input" placeholder="e.g. 101" value={editForm.room_number} onChange={(e) => setEditForm({ ...editForm, room_number: e.target.value })} />
+                                        </div>
+                                    </>
+                                )}
+                            </form>
+                        </div>
+
+                        <div className="tt-modal-footer">
+                            <button type="button" className="ap-btn-white" onClick={() => { setShowEditModal(false); setEditingEntry(null); }}>Cancel</button>
+                            <button type="submit" form="editEntryForm" className="ap-btn-edit-save">
+                                <EditIcon /> Save Changes
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

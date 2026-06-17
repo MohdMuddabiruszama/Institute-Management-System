@@ -26,8 +26,9 @@ const booleanField = Joi.boolean();
 // ── Pagination & Filtering (query params) ────────────────
 const pagination = Joi.object({
     page: Joi.number().integer().min(1).default(1),
-    limit: Joi.number().integer().min(1).max(100).default(10),
+    limit: Joi.number().integer().min(1).max(10000).default(10),
     search: Joi.string().max(200).allow("").default(""),
+    cursor: Joi.number().integer().positive().optional(),
     sortBy: Joi.string().max(50).optional(),
     order: Joi.string().valid("ASC", "DESC", "asc", "desc").default("DESC"),
 });

@@ -61,6 +61,7 @@ function Plans() {
         feature_mobile_app: false,
         feature_public_page: false,
         feature_assignment: false,
+        feature_performance_hub: false,
         feature_transport: false,
 
         is_free_trial: false,
@@ -71,8 +72,11 @@ function Plans() {
         lifetime_price: "",
         lifetime_slots_total: 100,
 
+        max_chat_messages: 500,
+
         razorpay_plan_id: "",
-        is_popular: false
+        is_popular: false,
+        is_hidden: false
     };
 
     const [formData, setFormData] = useState(initialFormState);
@@ -96,15 +100,16 @@ function Plans() {
         e.preventDefault();
         try {
             const payload = { ...formData };
-            // Ensure numeric values are numbers
-            payload.price = parseFloat(payload.price);
-            payload.max_students = parseInt(payload.max_students);
-            payload.max_faculty = parseInt(payload.max_faculty);
-            payload.max_classes = parseInt(payload.max_classes);
-            payload.max_admin_users = parseInt(payload.max_admin_users);
-            payload.trial_days = parseInt(payload.trial_days || 0);
-            if (payload.lifetime_price) payload.lifetime_price = parseFloat(payload.lifetime_price);
-            if (payload.lifetime_slots_total) payload.lifetime_slots_total = parseInt(payload.lifetime_slots_total);
+            // Ensure numeric values are numbers, handle empty strings
+            payload.price = payload.price !== "" && payload.price !== null ? parseFloat(payload.price) : 0;
+            payload.max_students = payload.max_students !== "" && payload.max_students !== null ? parseInt(payload.max_students) : 100;
+            payload.max_faculty = payload.max_faculty !== "" && payload.max_faculty !== null ? parseInt(payload.max_faculty) : 5;
+            payload.max_classes = payload.max_classes !== "" && payload.max_classes !== null ? parseInt(payload.max_classes) : 5;
+            payload.max_admin_users = payload.max_admin_users !== "" && payload.max_admin_users !== null ? parseInt(payload.max_admin_users) : 1;
+            payload.trial_days = payload.trial_days !== "" && payload.trial_days !== null ? parseInt(payload.trial_days) : 0;
+            payload.max_chat_messages = payload.max_chat_messages !== "" && payload.max_chat_messages !== null ? parseInt(payload.max_chat_messages) : 500;
+            payload.lifetime_price = payload.lifetime_price !== "" && payload.lifetime_price !== null ? parseFloat(payload.lifetime_price) : null;
+            payload.lifetime_slots_total = payload.lifetime_slots_total !== "" && payload.lifetime_slots_total !== null ? parseInt(payload.lifetime_slots_total) : 100;
 
             if (editMode) {
                 await api.put(`/plans/${formData.id}`, payload);
@@ -226,6 +231,11 @@ function Plans() {
                                     <div><strong>Faculty:</strong> {plan.max_faculty}</div>
                                     <div><strong>Classes:</strong> {plan.max_classes}</div>
                                     <div><strong>Admins:</strong> {plan.max_admin_users}</div>
+                                    {plan.feature_chat && (
+                                        <div style={{ gridColumn: '1 / -1', color: '#6366f1' }}>
+                                            <strong>💬 Chat Limit:</strong> {plan.max_chat_messages === -1 ? '∞ Unlimited' : `${plan.max_chat_messages} msgs/mo`}
+                                        </div>
+                                    )}
                                     {plan.is_free_trial && (
                                         <div style={{ gridColumn: '1 / -1', color: '#10b981', fontWeight: 'bold' }}>
                                             <strong>Trial Days:</strong> {plan.trial_days}
@@ -261,6 +271,9 @@ function Plans() {
                                 </li>
                                 <li style={{ marginBottom: "0.3rem", display: "flex", justifyContent: "space-between" }}>
                                     Assignments: <span>{plan.feature_assignment ? "✅" : "❌"}</span>
+                                </li>
+                                <li style={{ marginBottom: "0.3rem", display: "flex", justifyContent: "space-between" }}>
+                                    Performance Hub: <span>{plan.feature_performance_hub ? "✅" : "❌"}</span>
                                 </li>
                                 <li style={{ marginBottom: "0.3rem", display: "flex", justifyContent: "space-between" }}>
                                     Finances & Transport: <span>{plan.feature_transport ? "✅" : "❌"}</span>
@@ -468,6 +481,21 @@ function Plans() {
                                                 </div>
                                             </>
                                         )}
+                                        {formData.feature_chat && (
+                                            <div className="limit-input-group">
+                                                <label>💬 Max Chat/Msg</label>
+                                                <input
+                                                    type="number"
+                                                    name="max_chat_messages"
+                                                    className="form-input"
+                                                    value={formData.max_chat_messages}
+                                                    onChange={handleChange}
+                                                    min="1"
+                                                    placeholder="500"
+                                                    title="Monthly message limit per institute. -1 = unlimited."
+                                                />
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
 
@@ -511,7 +539,8 @@ function Plans() {
                                         {[
                                             { key: 'feature_auto_attendance', label: 'Smart Attendance' },
                                             { key: 'feature_fees', label: 'Fees Management' },
-                                            { key: 'feature_finance', label: 'Finance Dashboard' },
+                                            { key: 'feature_finance', label: '🏦 Finance Dashboard' },
+                                            { key: 'feature_expenses', label: 'Expenses' },
                                             { key: 'feature_salary', label: 'Faculty Salary Management' },
                                             { key: 'feature_announcements', label: 'Announcements' },
                                             { key: 'feature_exams', label: 'Examinations' },
@@ -529,9 +558,11 @@ function Plans() {
                                             { key: 'feature_mobile_app', label: 'Mobile App' },
                                             { key: 'feature_public_page', label: '🌐 Public Web Page' },
                                             { key: 'feature_assignment', label: '📝 Assignments' },
+                                            { key: 'feature_performance_hub', label: '🎯 Performance Hub' },
                                             { key: 'feature_transport', label: '🚌 Finances & Transport' },
                                             { key: 'is_free_trial', label: 'Start Free Trial' },
                                             { key: 'is_popular', label: 'Mark as Popular' },
+                                            { key: 'is_hidden', label: 'Hide Plan from Public' },
                                             { key: 'is_lifetime', label: '💎 Lifetime Plan (One-Time)' },
                                         ].map(feature => (
                                             <label key={feature.key} className="feature-checkbox">

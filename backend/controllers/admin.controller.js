@@ -1,72 +1,82 @@
-const { Student, Faculty, Class, User, StudentFee, Announcement, ChatMessage, ChatRoom } = require("../models");
+const { Student, Faculty, Class, User, StudentFee, Announcement, ChatMessage, ChatRoom, Assignment, Note, PublicEnquiry, sequelize } = require("../models");
 const { Op } = require("sequelize");
 
 exports.getDashboardStats = async (req, res) => {
     try {
         const institute_id = req.user.institute_id;
 
-        // Total Students
-        const totalStudents = await Student.count({
-            where: { institute_id }
-        });
+        const currentUser = await User.findByPk(req.user.id, { attributes: ['last_chat_seen_at', 'last_announcement_seen_at', 'last_assignment_seen_at', 'last_note_seen_at', 'last_enquiry_seen_at'] });
+        const lastChatSeenAt = currentUser?.last_chat_seen_at || new Date(0);
+        const lastAnnouncementSeenAt = currentUser?.last_announcement_seen_at || new Date(0);
+        const lastAssignmentSeenAt = currentUser?.last_assignment_seen_at || new Date(0);
+        const lastNoteSeenAt = currentUser?.last_note_seen_at || new Date(0);
+        const lastEnquirySeenAt = currentUser?.last_enquiry_seen_at || new Date(0);
 
-        // Total Faculty
-        const totalFaculty = await Faculty.count({
-            where: { institute_id }
-        });
-
-        // Total Classes
-        const totalClasses = await Class.count({
-            where: { institute_id }
-        });
-
-        // Total Admins (New)
-        const totalAdmins = await User.count({
-            where: {
-                institute_id,
-                role: 'admin'
-            }
-        });
-
-        // Active Students (User status = active)
-        const activeStudents = await Student.count({
-            include: [
-                {
-                    model: User,
-                    where: { status: "active" }
+        // Run all counts in parallel for performance
+        const [
+            totalStudents,
+            totalFaculty,
+            totalClasses,
+            totalAdmins,
+            totalManagers,
+            activeStudents,
+            studentFees,
+            unreadChatCount,
+            unreadAnnouncementCount,
+            unreadAssignmentCount,
+            unreadNoteCount,
+            unreadEnquiryCount
+        ] = await Promise.all([
+            Student.count({ where: { institute_id } }),
+            Faculty.count({ where: { institute_id } }),
+            Class.count({ where: { institute_id } }),
+            User.count({ where: { institute_id, role: 'admin' } }),
+            User.count({ where: { institute_id, role: 'manager' } }),
+            Student.count({
+                include: [{ model: User, where: { status: "active" } }],
+                where: { institute_id }
+            }),
+            StudentFee.findAll({ where: { institute_id } }),
+            ChatMessage.count({
+                where: {
+                    created_at: { [Op.gt]: lastChatSeenAt },
+                    sender_id: { [Op.ne]: req.user.id },
+                    room_id: {
+                        [Op.in]: sequelize.literal(`(SELECT id FROM chat_rooms WHERE institute_id = ${institute_id})`)
+                    }
                 }
-            ],
-            where: { institute_id }
-        });
+            }),
+            Announcement.count({
+                where: {
+                    institute_id,
+                    created_at: { [Op.gt]: lastAnnouncementSeenAt },
+                    created_by: { [Op.ne]: req.user.id }
+                }
+            }),
+            Assignment.count({
+                where: {
+                    institute_id,
+                    created_at: { [Op.gt]: lastAssignmentSeenAt },
+                    faculty_id: { [Op.ne]: req.user.id }
+                }
+            }),
+            Note.count({
+                where: {
+                    institute_id,
+                    created_at: { [Op.gt]: lastNoteSeenAt },
+                    faculty_id: { [Op.ne]: req.user.id }
+                }
+            }),
+            PublicEnquiry.count({
+                where: {
+                    institute_id,
+                    created_at: { [Op.gt]: lastEnquirySeenAt }
+                }
+            })
+        ]);
 
-        // Fees metrics
-        const studentFees = await StudentFee.findAll({ where: { institute_id } });
         const totalDiscount = studentFees.reduce((sum, sf) => sum + parseFloat(sf.discount_amount || 0), 0);
         const totalDue = studentFees.reduce((sum, sf) => sum + parseFloat(sf.due_amount || 0), 0);
-
-        // Unread Counts
-        const currentUser = await User.findByPk(req.user.id);
-        const lastChatSeenAt = currentUser.last_chat_seen_at || new Date(0);
-        const lastAnnouncementSeenAt = currentUser.last_announcement_seen_at || new Date(0);
-
-        const unreadChatCount = await ChatMessage.count({
-            include: [{
-                model: ChatRoom,
-                where: { institute_id }
-            }],
-            where: {
-                created_at: { [Op.gt]: lastChatSeenAt },
-                sender_id: { [Op.ne]: req.user.id }
-            }
-        });
-
-        const unreadAnnouncementCount = await Announcement.count({
-            where: {
-                institute_id,
-                createdAt: { [Op.gt]: lastAnnouncementSeenAt },
-                created_by: { [Op.ne]: req.user.id }
-            }
-        });
 
         res.status(200).json({
             success: true,
@@ -75,11 +85,15 @@ exports.getDashboardStats = async (req, res) => {
                 totalFaculty,
                 totalClasses,
                 totalAdmins,
+                totalManagers,
                 activeStudents,
                 totalDiscount,
                 totalDue,
                 unreadChatCount,
-                unreadAnnouncementCount
+                unreadAnnouncementCount,
+                unreadAssignmentCount,
+                unreadNotesCount: unreadNoteCount,
+                unreadEnquiryCount
             }
         });
 
@@ -112,6 +126,35 @@ exports.clearUnreadChats = async (req, res) => {
     }
 };
 
+exports.clearUnreadAssignments = async (req, res) => {
+    try {
+        await User.update({ last_assignment_seen_at: new Date() }, { where: { id: req.user.id } });
+        res.status(200).json({ success: true, message: "Cleared unread assignments count" });
+    } catch (error) {
+        console.error("Clear assignments error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.clearUnreadNotes = async (req, res) => {
+    try {
+        await User.update({ last_note_seen_at: new Date() }, { where: { id: req.user.id } });
+        res.status(200).json({ success: true, message: "Cleared unread notes count" });
+    } catch (error) {
+        console.error("Clear notes error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.clearUnreadEnquiries = async (req, res) => {
+    try {
+        await User.update({ last_enquiry_seen_at: new Date() }, { where: { id: req.user.id } });
+        res.status(200).json({ success: true, message: "Cleared unread enquiries count" });
+    } catch (error) {
+        console.error("Clear enquiries error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 // --- Admin Management ---
 

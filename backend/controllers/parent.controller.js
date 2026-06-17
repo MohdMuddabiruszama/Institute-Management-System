@@ -1,4 +1,4 @@
-const { User, StudentParent, Student, Class, Subject, Institute, Attendance, Mark, Exam, StudentFee, Note, NoteDownload } = require("../models");
+const { User, StudentParent, Student, Class, Subject, Institute, Attendance, Mark, Exam, StudentFee, Note, NoteDownload, Faculty } = require("../models");
 const { hashPassword } = require("../utils/hashPassword");
 const { Op } = require("sequelize");
 
@@ -29,7 +29,12 @@ exports.createParent = async (req, res) => {
             return res.status(409).json({ success: false, message: "User with this email already exists" });
         }
 
-        const password_hash = await hashPassword(password || "parent123");
+        const { generateTempPassword } = require('../utils/passwordGenerator');
+        const tempPassword = password || generateTempPassword();
+        const password_hash = await hashPassword(tempPassword);
+
+        const temp_password_expires_at = new Date();
+        temp_password_expires_at.setDate(temp_password_expires_at.getDate() + 7);
 
         const user = await User.create({
             institute_id,
@@ -38,7 +43,11 @@ exports.createParent = async (req, res) => {
             email,
             phone,
             password_hash,
-            status: "active"
+            status: "active",
+            is_first_login: true,
+            temp_password_expires_at,
+            credentials_sent_at: email ? new Date() : null,
+            initial_password: tempPassword
         });
 
         if (student_ids && student_ids.length > 0) {
@@ -68,12 +77,15 @@ exports.createParent = async (req, res) => {
 exports.getAllParents = async (req, res) => {
     try {
         const institute_id = req.user.institute_id;
-        const { search } = req.query;
+        const { search = "", page = 1, limit = 25, cursor } = req.query;
+        const parsedLimit = Math.min(parseInt(limit, 10) || 25, 100);
+        const offset = (parseInt(page, 10) - 1) * parsedLimit;
 
         const whereClause = {
             institute_id,
             role: "parent",
         };
+        if (cursor) whereClause.id = { [Op.lt]: cursor };
 
         if (search) {
             whereClause[Op.or] = [
@@ -83,23 +95,36 @@ exports.getAllParents = async (req, res) => {
             ];
         }
 
-        const parents = await User.findAll({
+        const queryOptions = {
             where: whereClause,
             attributes: ["id", "name", "email", "phone", "status"],
             include: [{
                 model: Student,
                 as: "LinkedStudents",
                 attributes: ["id", "roll_number", "institute_id"],
-                include: [{ model: User, attributes: ["name"] }],
+                include: [
+                    { model: User, attributes: ["name"] },
+                    { model: Class, attributes: ["id", "name", "section"], through: { attributes: [] } }
+                ],
                 through: { attributes: ["relationship"] }
             }],
-            order: [["id", "DESC"]]
-        });
+            order: [["id", "DESC"]],
+            limit: cursor ? parsedLimit + 1 : parsedLimit,
+        };
+
+        if (!cursor) queryOptions.offset = parseInt(offset, 10);
+
+        const rows = await User.findAll(queryOptions);
+        const hasMore = cursor ? rows.length > parsedLimit : rows.length === parsedLimit;
+        const parents = cursor && hasMore ? rows.slice(0, parsedLimit) : rows;
 
         res.status(200).json({
             success: true,
             message: "Parents retrieved successfully",
-            data: parents
+            data: parents,
+            count: parents.length,
+            nextCursor: hasMore && parents.length ? parents[parents.length - 1].id : null,
+            hasMore,
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -126,7 +151,23 @@ exports.getDashboard = async (req, res) => {
                 },
                 { model: User, attributes: ["name", "email", "phone"] },
                 { model: Class, attributes: ["id", "name"], through: { attributes: [] } },
-                { model: Subject, attributes: ["id", "name"], through: { attributes: [] } }
+                { 
+                    model: Subject, 
+                    attributes: ["id", "name"], 
+                    through: { attributes: [] },
+                    include: [{
+                        model: Faculty,
+                        attributes: ["id", "user_id"],
+                        include: [{
+                            model: User,
+                            attributes: ["name"]
+                        }]
+                    }]
+                },
+                {
+                    model: StudentFee,
+                    attributes: ["status", "reminder_date", "due_amount"]
+                }
             ]
         });
 
@@ -137,7 +178,15 @@ exports.getDashboard = async (req, res) => {
                 const classIds = responseData.Classes.map(c => c.id);
                 const allSubjects = await Subject.findAll({
                     where: { institute_id: req.user.institute_id, class_id: { [Op.in]: classIds } },
-                    attributes: ["id", "name"]
+                    attributes: ["id", "name"],
+                    include: [{
+                        model: Faculty,
+                        attributes: ["id", "user_id"],
+                        include: [{
+                            model: User,
+                            attributes: ["name"]
+                        }]
+                    }]
                 });
 
                 const existingSubIds = new Set((responseData.Subjects || []).map(s => s.id));
@@ -178,7 +227,19 @@ exports.getStudentProfile = async (req, res) => {
             include: [
                 { model: User, attributes: ["name", "email", "phone"] },
                 { model: Class, attributes: ["id", "name"], through: { attributes: [] } },
-                { model: Subject, attributes: ["id", "name"], through: { attributes: [] } }
+                { 
+                    model: Subject, 
+                    attributes: ["id", "name"], 
+                    through: { attributes: [] },
+                    include: [{
+                        model: Faculty,
+                        attributes: ["id", "user_id"],
+                        include: [{
+                            model: User,
+                            attributes: ["name"]
+                        }]
+                    }]
+                }
             ]
         });
 
@@ -187,7 +248,15 @@ exports.getStudentProfile = async (req, res) => {
             const classIds = responseData.Classes.map(c => c.id);
             const allSubjects = await Subject.findAll({
                 where: { institute_id: req.user.institute_id, class_id: { [Op.in]: classIds } },
-                attributes: ["id", "name"]
+                attributes: ["id", "name"],
+                include: [{
+                    model: Faculty,
+                    attributes: ["id", "user_id"],
+                    include: [{
+                        model: User,
+                        attributes: ["name"]
+                    }]
+                }]
             });
 
             const existingSubIds = new Set((responseData.Subjects || []).map(s => s.id));
@@ -228,20 +297,41 @@ exports.getStudentAttendance = async (req, res) => {
             order: [['date', 'ASC']]
         });
 
-        const present = records.filter(r => r.status === 'present').length;
-        const absent = records.filter(r => r.status === 'absent').length;
-        const late = records.filter(r => r.status === 'late').length;
-        const holidays = records.filter(r => r.status === 'holiday').length;
-        const total = records.filter(r => r.status !== 'holiday').length; // working days
-        const percentage = total > 0 ? ((present / total) * 100).toFixed(2) : 0;
+        const uniqueDatesMap = {};
+        records.forEach(r => {
+            if (!uniqueDatesMap[r.date]) uniqueDatesMap[r.date] = [];
+            uniqueDatesMap[r.date].push(r.status);
+        });
+
+        let total_days = 0, working_days = 0, present = 0, absent = 0, late = 0, holidays = 0;
+
+        Object.values(uniqueDatesMap).forEach(statuses => {
+            total_days++;
+            if (statuses.includes('holiday')) {
+                holidays++;
+            } else {
+                working_days++;
+                if (statuses.includes('present')) {
+                    present++;
+                } else if (statuses.includes('late')) {
+                    late++;
+                } else if (statuses.includes('half_day')) {
+                    present++;
+                } else if (statuses.includes('absent')) {
+                    absent++;
+                }
+            }
+        });
+
+        const percentage = working_days > 0 ? (((present + late) / working_days) * 100).toFixed(2) : 0;
 
         res.status(200).json({
             success: true,
             data: {
                 records,
                 summary: {
-                    total_days: records.length,
-                    working_days: total,
+                    total_days: total_days,
+                    working_days: working_days,
                     present_days: present,
                     absent_days: absent,
                     late_days: late,
@@ -367,7 +457,10 @@ exports.getParentById = async (req, res) => {
                 model: Student,
                 as: "LinkedStudents",
                 attributes: ["id", "roll_number"],
-                include: [{ model: User, attributes: ["name"] }],
+                include: [
+                    { model: User, attributes: ["name"] },
+                    { model: Class, attributes: ["id", "name", "section"], through: { attributes: [] } }
+                ],
                 through: { attributes: ["relationship"] }
             }]
         });
@@ -439,6 +532,48 @@ exports.deleteParent = async (req, res) => {
 
         res.status(200).json({ success: true, message: "Parent deleted successfully" });
     } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Delete multiple parents
+ * @route POST /api/parents/bulk-delete
+ * @access Admin
+ */
+exports.bulkDeleteParents = async (req, res) => {
+    let transaction;
+    try {
+        const institute_id = req.user.institute_id;
+        const { parent_ids } = req.body;
+
+        if (!parent_ids || !Array.isArray(parent_ids) || parent_ids.length === 0) {
+            return res.status(400).json({ success: false, message: "No parents selected for deletion" });
+        }
+
+        const { sequelize } = require("../models");
+        transaction = await sequelize.transaction();
+
+        const parents = await User.findAll({
+            where: { id: { [Op.in]: parent_ids }, institute_id, role: "parent" },
+            transaction
+        });
+
+        if (parents.length === 0) {
+            await transaction.rollback();
+            return res.status(404).json({ success: false, message: "No valid parents found to delete" });
+        }
+
+        const userIds = parents.map(p => p.id);
+
+        await StudentParent.destroy({ where: { parent_id: { [Op.in]: userIds } }, transaction });
+        await User.destroy({ where: { id: { [Op.in]: userIds }, institute_id, role: "parent" }, transaction });
+
+        await transaction.commit();
+
+        res.status(200).json({ success: true, message: `${parents.length} parent(s) deleted successfully` });
+    } catch (error) {
+        if (transaction) await transaction.rollback();
         res.status(500).json({ success: false, message: error.message });
     }
 };

@@ -14,6 +14,7 @@ const FacultyAttendance = require("./facultyAttendance");
 const FeesStructure = require("./feesStructure");
 const Payment = require("./payment");
 const Announcement = require("./announcement");
+const AnnouncementRead = require("./AnnouncementRead");
 const Exam = require("./exam");
 const Mark = require("./mark");
 const Subscription = require("./subscription");
@@ -46,6 +47,7 @@ const Invoice = require("./invoice");
 const StudentFeePayment = require("./studentFeePayment");
 const OtpVerification = require("./otpVerification");
 const FacultySalary = require("./facultySalary");
+const FacultySalarySettings = require("./facultySalarySettings");
 const AuditLog = require("./auditLog");
 const SlowRequestLog = require("./slowRequestLog");
 const BulkImportLog = require("./BulkImportLog")(require("../config/database"));
@@ -188,6 +190,12 @@ Institute.hasMany(Announcement, { foreignKey: "institute_id" });
 Announcement.belongsTo(Subject, { foreignKey: "subject_id" });
 Subject.hasMany(Announcement, { foreignKey: "subject_id" });
 
+// AnnouncementRead Associations (Phase 1 — Smart Announcement System)
+Announcement.hasMany(AnnouncementRead, { foreignKey: "announcement_id" });
+AnnouncementRead.belongsTo(Announcement, { foreignKey: "announcement_id" });
+AnnouncementRead.belongsTo(User, { foreignKey: "user_id" });
+User.hasMany(AnnouncementRead, { foreignKey: "user_id" });
+
 // Attendance Associations
 Attendance.belongsTo(Student, { foreignKey: "student_id" });
 Student.hasMany(Attendance, { foreignKey: "student_id" });
@@ -265,6 +273,9 @@ User.hasMany(ClassSession, { foreignKey: "faculty_id" });
 // Timetable Associations
 TimetableSlot.belongsTo(Institute, { foreignKey: "institute_id" });
 Institute.hasMany(TimetableSlot, { foreignKey: "institute_id" });
+
+TimetableSlot.belongsTo(Class, { foreignKey: "class_id" });
+Class.hasMany(TimetableSlot, { foreignKey: "class_id" });
 
 Timetable.belongsTo(Institute, { foreignKey: "institute_id" });
 Institute.hasMany(Timetable, { foreignKey: "institute_id" });
@@ -441,6 +452,16 @@ Faculty.hasMany(FacultySalary, { foreignKey: "faculty_id" });
 FacultySalary.belongsTo(User, { as: "paidBy", foreignKey: "paid_by" });
 User.hasMany(FacultySalary, { foreignKey: "paid_by" });
 
+// FacultySalary ↔ User direct association (for getAllSalaries JOIN)
+FacultySalary.belongsTo(User, { as: "facultyUser", foreignKey: "faculty_id" });
+
+// FacultySalarySettings Associations
+FacultySalarySettings.belongsTo(Institute, { foreignKey: "institute_id" });
+Institute.hasMany(FacultySalarySettings, { foreignKey: "institute_id" });
+
+FacultySalarySettings.belongsTo(User, { as: "faculty", foreignKey: "faculty_id" });
+User.hasMany(FacultySalarySettings, { foreignKey: "faculty_id" });
+
 // Operational Monitoring Associations
 AuditLog.belongsTo(Institute, { foreignKey: "institute_id" });
 Institute.hasMany(AuditLog, { foreignKey: "institute_id" });
@@ -478,6 +499,7 @@ module.exports = {
     FeesStructure,
     Payment,
     Announcement,
+    AnnouncementRead,
     Exam,
     Mark,
     Subscription,
@@ -518,6 +540,7 @@ module.exports = {
     StudentFeePayment,
     OtpVerification,
     FacultySalary,
+    FacultySalarySettings,
     LandingPageView,
     AuditLog,
     SlowRequestLog,

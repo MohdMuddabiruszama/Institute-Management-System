@@ -75,12 +75,14 @@ exports.registerInstitute = async (data) => {
         current_limit_faculty: plan ? plan.max_faculty : 5,
         current_limit_classes: plan ? plan.max_classes : 5,
         current_limit_admins: plan ? plan.max_admin_users : 1,
+        current_limit_chat_messages: plan ? (plan.max_chat_messages || 500) : 500,
 
         // Snapshot features
         current_feature_attendance: plan ? plan.feature_attendance : 'basic',
         current_feature_auto_attendance: plan ? plan.feature_auto_attendance : false,
         current_feature_fees: plan ? plan.feature_fees : false,
         current_feature_finance: plan ? plan.feature_finance : false,
+        current_feature_expenses: plan ? plan.feature_expenses : false,
         current_feature_salary: plan ? plan.feature_salary : false,
         current_feature_reports: plan ? plan.feature_reports : 'none',
         current_feature_announcements: plan ? plan.feature_announcements : false,
@@ -91,9 +93,15 @@ exports.registerInstitute = async (data) => {
         current_feature_multi_branch: plan ? plan.feature_multi_branch : false,
         current_feature_api_access: plan ? plan.feature_api_access : false,
         current_feature_assignment: plan ? plan.feature_assignment : false,
+        current_feature_performance_hub: plan ? plan.feature_performance_hub : false,
         current_feature_transport: plan ? plan.feature_transport : false,
         current_feature_mobile_app: plan ? plan.feature_mobile_app : false,
         current_feature_public_page: plan ? plan.feature_public_page : false,
+        current_feature_chat: plan ? plan.feature_chat : false,
+        current_feature_push_notifications: plan ? plan.feature_push_notifications : false,
+        current_feature_offline_attendance: plan ? plan.feature_offline_attendance : false,
+        current_feature_parent_app: plan ? plan.feature_parent_app : false,
+        current_feature_student_app: plan ? plan.feature_student_app : false,
         has_used_trial: hasUsedTrial,
         logo: data.logo || null,
     });
@@ -207,7 +215,7 @@ exports.changePassword = async (userId, oldPassword, newPassword) => {
 
 exports.getProfile = async (userId) => {
     const user = await User.findByPk(userId, {
-        attributes: ['id', 'name', 'email', 'role', 'institute_id', 'permissions', 'theme_dark', 'theme_style'],
+        attributes: ['id', 'name', 'email', 'role', 'status', 'is_first_login', 'institute_id', 'permissions', 'theme_dark', 'theme_style'],
         include: [{
             model: Institute,
             include: [{ model: Plan }] // Include Plan details

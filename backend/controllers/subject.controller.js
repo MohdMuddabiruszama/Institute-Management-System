@@ -8,12 +8,13 @@ const { Op } = require("sequelize");
 
 exports.createSubject = async (req, res) => {
     try {
-        const { name, class_id, faculty_id } = req.body;
+        const { name, code, class_id, faculty_id } = req.body;
         const institute_id = req.user.institute_id;
 
         const subject = await Subject.create({
             institute_id,
             name,
+            code: code || null,
             class_id: class_id || null,
             faculty_id: faculty_id || null,
         });
@@ -76,10 +77,29 @@ exports.getAllSubjects = async (req, res) => {
             ],
         });
 
+        const subjectIds = rows.map(r => r.id);
+        const StudentSubject = require("../models/studentSubject");
+        const studentCounts = await StudentSubject.findAll({
+            where: { subject_id: subjectIds, institute_id },
+            attributes: ['subject_id', [require("sequelize").fn("COUNT", require("sequelize").col("student_id")), "count"]],
+            group: ['subject_id']
+        });
+
+        const countsMap = {};
+        studentCounts.forEach(sc => {
+            countsMap[sc.subject_id] = parseInt(sc.get('count'), 10);
+        });
+
+        const dataWithCounts = rows.map(r => {
+            const data = r.toJSON();
+            data.enrolled_students_count = countsMap[r.id] || 0;
+            return data;
+        });
+
         res.status(200).json({
             success: true,
             message: "Subjects retrieved successfully",
-            data: rows,
+            data: dataWithCounts,
             count: count
         });
     } catch (error) {

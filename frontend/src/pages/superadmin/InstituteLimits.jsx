@@ -12,19 +12,33 @@ import BackButton from "../../components/common/BackButton";
 import ThemeSelector from "../../components/ThemeSelector";
 import "../admin/Dashboard.css";
 import "./Plans.css";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+import * as XLSX from "xlsx";
 
 /* ─ helpers ─ */
 const fmt = (n) => (n !== undefined && n !== null ? n : "N/A");
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" }) : "N/A");
+const formatStorage = (mb) => {
+    if (!mb) return "0 MB";
+    if (mb >= 1024) return (mb / 1024).toFixed(2) + " GB";
+    return mb.toFixed(2) + " MB";
+};
+const getAddress = (inst) => {
+    const parts = [inst.address, inst.city, inst.state, inst.zip_code].filter(Boolean);
+    return parts.length > 0 ? parts.join(', ') : "N/A";
+};
 
 // Smart Attendance is index 0 — the Feature Toggles renderer treats it specially
 // (shows QR sub-feature dependency cards beneath it)
 const BOOL_FEATURES = [
     { key: "current_feature_auto_attendance", label: "Smart Attendance",       icon: "📸", desc: "QR-based smart attendance system" },
     { key: "current_feature_fees",            label: "Fees Management",        icon: "💰", desc: "Student fee collection & tracking" },
-    { key: "current_feature_finance",         label: "Finance Dashboard",      icon: "📊", desc: "Institute-wide finance analytics" },
+    { key: "current_feature_finance",         label: "Finance Dashboard",      icon: "🏦", desc: "Institute-wide finance analytics" },
+    { key: "current_feature_expenses",        label: "Expenses",               icon: "💸", desc: "Expense tracking & management" },
     { key: "current_feature_salary",          label: "Faculty Salary",         icon: "💼", desc: "Faculty payroll management" },
     { key: "current_feature_assignment",      label: "Assignments",            icon: "📝", desc: "Homework & assignment submissions" },
+    { key: "current_feature_performance_hub", label: "Performance Hub",        icon: "🎯", desc: "Advanced performance analytics" },
     { key: "current_feature_transport",       label: "Finances & Transport",   icon: "🚌", desc: "Expense tracking & transport fees" },
     { key: "current_feature_announcements",   label: "Announcements",          icon: "📢", desc: "Broadcast notices to users" },
     { key: "current_feature_export",          label: "Export Data",            icon: "📥", desc: "CSV / PDF data exports" },
@@ -35,6 +49,7 @@ const BOOL_FEATURES = [
     { key: "current_feature_api_access",      label: "API Access",            icon: "🔌", desc: "External API integration" },
     { key: "current_feature_public_page",     label: "Public Web Page",       icon: "🌐", desc: "Publicly visible institute page" },
     { key: "current_feature_mobile_app",      label: "Mobile App",            icon: "📱", desc: "Mobile application access" },
+    { key: "current_feature_chat",            label: "Academic Chats",        icon: "💬", desc: "In-app messaging for users" },
 ];
 
 // QR sub-features that are gated by Smart Attendance
@@ -133,6 +148,7 @@ function InstituteLimits() {
                 current_feature_auto_attendance: !!inst.current_feature_auto_attendance,
                 current_feature_fees: !!inst.current_feature_fees,
                 current_feature_finance: !!inst.current_feature_finance,
+                current_feature_expenses: !!inst.current_feature_expenses,
                 current_feature_salary: !!inst.current_feature_salary,
                 current_feature_announcements: !!inst.current_feature_announcements,
                 current_feature_export: !!inst.current_feature_export,
@@ -143,7 +159,10 @@ function InstituteLimits() {
                 current_feature_api_access: !!inst.current_feature_api_access,
                 current_feature_public_page: !!inst.current_feature_public_page,
                 current_feature_assignment: !!inst.current_feature_assignment,
+                current_feature_performance_hub: !!inst.current_feature_performance_hub,
                 current_feature_transport: !!inst.current_feature_transport,
+                current_feature_chat: !!inst.current_feature_chat,
+                current_limit_chat_messages: inst.current_limit_chat_messages || 0,
             });
         } catch (e) {
             console.error(e);
@@ -216,6 +235,7 @@ function InstituteLimits() {
             current_feature_auto_attendance: !!plan.feature_auto_attendance,
             current_feature_fees: !!plan.feature_fees,
             current_feature_finance: !!plan.feature_finance,
+            current_feature_expenses: !!plan.feature_expenses,
             current_feature_salary: !!plan.feature_salary,
             current_feature_announcements: !!plan.feature_announcements,
             current_feature_export: !!plan.feature_export,
@@ -226,9 +246,89 @@ function InstituteLimits() {
             current_feature_api_access: !!plan.feature_api_access,
             current_feature_public_page: !!plan.feature_public_page,
             current_feature_assignment: !!plan.feature_assignment,
+            current_feature_performance_hub: !!plan.feature_performance_hub,
             current_feature_transport: !!plan.feature_transport,
+            current_feature_chat: !!plan.feature_chat,
+            current_limit_chat_messages: plan.max_chat_messages || 0,
         }));
         setMsg("ℹ️ Limits synced from base plan. Click Save to apply.");
+    };
+
+    const handleDownloadPDF = () => {
+        if (!details || !details.institute) return;
+        const doc = new jsPDF();
+        const inst = details.institute;
+        const stats = details.stats;
+        
+        doc.setFontSize(20);
+        doc.text(`Institute Details: ${inst.name}`, 14, 22);
+        
+        doc.setFontSize(11);
+        doc.text(`Email: ${inst.email}`, 14, 30);
+        doc.text(`Phone: ${inst.phone || "N/A"}`, 14, 36);
+        doc.text(`Address: ${getAddress(inst)}`, 14, 42);
+        doc.text(`Status: ${inst.status?.toUpperCase()}`, 14, 48);
+        doc.text(`Plan: ${inst.Plan?.name || "None"}`, 14, 54);
+        doc.text(`Subscription Start: ${details.latestSubscription ? fmtDate(details.latestSubscription.start_date) : "N/A"}`, 14, 60);
+        doc.text(`Subscription End: ${fmtDate(inst.subscription_end)}`, 14, 66);
+
+        const tableData = [
+            ["Metric", "Count"],
+            ["Students", stats?.totalStudents || 0],
+            ["Faculty", stats?.totalFaculty || 0],
+            ["Managers", stats?.totalManagers || 0],
+            ["Classes", stats?.totalClasses || 0],
+            ["Subjects", stats?.totalSubjects || 0],
+            ["Exams", stats?.totalExams || 0],
+            ["Assignments", stats?.totalAssignments || 0],
+            ["Notes", stats?.totalNotes || 0],
+            ["Storage Used", formatStorage(stats?.storageUsed)],
+            ["Features Active", stats?.totalFeatures || 0],
+            ["Parents", stats?.totalParents || 0]
+        ];
+
+        autoTable(doc, {
+            startY: 76,
+            head: [tableData[0]],
+            body: tableData.slice(1),
+            theme: 'grid',
+            headStyles: { fillColor: [99, 102, 241] }
+        });
+
+        doc.save(`${inst.name.replace(/\s+/g, '_')}_Details.pdf`);
+    };
+
+    const handleDownloadExcel = () => {
+        if (!details || !details.institute) return;
+        const inst = details.institute;
+        const stats = details.stats;
+
+        const info = [
+            { "Metric": "Name", "Value": inst.name },
+            { "Metric": "Email", "Value": inst.email },
+            { "Metric": "Phone", "Value": inst.phone || "N/A" },
+            { "Metric": "Address", "Value": getAddress(inst) },
+            { "Metric": "Status", "Value": inst.status },
+            { "Metric": "Plan", "Value": inst.Plan?.name || "None" },
+            { "Metric": "Subscription Start", "Value": details.latestSubscription ? fmtDate(details.latestSubscription.start_date) : "N/A" },
+            { "Metric": "Subscription End", "Value": fmtDate(inst.subscription_end) },
+            { "Metric": "Students", "Value": stats?.totalStudents || 0 },
+            { "Metric": "Faculty", "Value": stats?.totalFaculty || 0 },
+            { "Metric": "Managers", "Value": stats?.totalManagers || 0 },
+            { "Metric": "Classes", "Value": stats?.totalClasses || 0 },
+            { "Metric": "Subjects", "Value": stats?.totalSubjects || 0 },
+            { "Metric": "Exams", "Value": stats?.totalExams || 0 },
+            { "Metric": "Assignments", "Value": stats?.totalAssignments || 0 },
+            { "Metric": "Notes", "Value": stats?.totalNotes || 0 },
+            { "Metric": "Storage Used", "Value": formatStorage(stats?.storageUsed) },
+            { "Metric": "Features Active", "Value": stats?.totalFeatures || 0 },
+            { "Metric": "Parents", "Value": stats?.totalParents || 0 }
+        ];
+
+        const ws = XLSX.utils.json_to_sheet(info);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Institute Details");
+        XLSX.writeFile(wb, `${inst.name.replace(/\s+/g, '_')}_Details.xlsx`);
     };
 
     const filtered = institutes.filter(i =>
@@ -322,8 +422,14 @@ function InstituteLimits() {
                             <h2 style={{ margin: 0, fontSize: "1.4rem" }}>{selected.name}</h2>
                             <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "14px" }}>{selected.email}</p>
                         </div>
-                        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                            <span className={`badge badge-${selected.status === 'active' ? 'success' : selected.status === 'suspended' ? 'warning' : 'danger'}`} style={{ fontSize: "13px", padding: "6px 14px" }}>
+                        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+                            <button className="btn btn-sm" style={{ background: "#ef4444", color: "#fff", display: "flex", alignItems: "center", gap: "6px" }} onClick={handleDownloadPDF}>
+                                📄 Download PDF
+                            </button>
+                            <button className="btn btn-sm" style={{ background: "#10b981", color: "#fff", display: "flex", alignItems: "center", gap: "6px" }} onClick={handleDownloadExcel}>
+                                📊 Download Excel
+                            </button>
+                            <span className={`badge badge-${selected.status === 'active' ? 'success' : selected.status === 'suspended' ? 'warning' : 'danger'}`} style={{ fontSize: "13px", padding: "6px 14px", marginLeft: "8px" }}>
                                 {selected.status?.toUpperCase()}
                             </span>
                             <button className="btn btn-sm" style={{ background: "var(--border-color)", color: "var(--text-primary)" }} onClick={() => { setSelected(null); setSearchParams({}); }}>
@@ -697,7 +803,7 @@ function InstituteLimits() {
 
                                         {/* ── All other feature toggles ── */}
                                         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))", gap: "10px", marginTop: "4px" }}>
-                                            {BOOL_FEATURES.slice(1).map(f => {
+                                            {BOOL_FEATURES.slice(1).filter(f => f.key !== "current_feature_chat").map(f => {
                                                 const val = editMode ? !!formData[f.key] : !!inst[f.key];
                                                 return (
                                                     <div
@@ -722,6 +828,61 @@ function InstituteLimits() {
                                                 );
                                             })}
                                         </div>
+
+                                        {/* ── Academic Chats Feature ── */}
+                                        {(() => {
+                                            const chatFeat = BOOL_FEATURES.find(f => f.key === "current_feature_chat");
+                                            if (!chatFeat) return null;
+                                            const val = editMode ? !!formData[chatFeat.key] : !!inst[chatFeat.key];
+                                            return (
+                                                <div style={{ marginTop: "6px" }}>
+                                                    <div
+                                                        onClick={() => editMode && setFormData(p => ({ ...p, [chatFeat.key]: !p[chatFeat.key] }))}
+                                                        style={{
+                                                            display: "flex", alignItems: "center", gap: "12px",
+                                                            padding: "14px 18px", borderRadius: val && editMode ? "14px 14px 0 0" : "14px",
+                                                            border: `2px solid ${val ? "rgba(16,185,129,0.5)" : "var(--border-color)"}`,
+                                                            borderBottom: val && editMode ? "none" : `2px solid ${val ? "rgba(16,185,129,0.5)" : "var(--border-color)"}`,
+                                                            background: val ? "rgba(16,185,129,0.07)" : "var(--card-bg, #f9fafb)",
+                                                            cursor: editMode ? "pointer" : "default",
+                                                            userSelect: "none", transition: "all 0.25s",
+                                                            boxShadow: val ? "0 0 0 3px rgba(16,185,129,0.1)" : "none"
+                                                        }}
+                                                    >
+                                                        <span style={{ fontSize: "22px" }}>{chatFeat.icon}</span>
+                                                        <ToggleSwitch val={val} />
+                                                        <div style={{ flex: 1 }}>
+                                                            <div style={{ fontWeight: 700, fontSize: "14px", color: "var(--text-primary)" }}>{chatFeat.label}</div>
+                                                            <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "2px" }}>{chatFeat.desc}</div>
+                                                        </div>
+                                                    </div>
+                                                    {val && editMode && (
+                                                        <div style={{
+                                                            padding: "16px 18px",
+                                                            background: "var(--card-bg, #f9fafb)",
+                                                            border: "2px solid rgba(16,185,129,0.5)",
+                                                            borderTop: "1px dashed rgba(16,185,129,0.3)",
+                                                            borderRadius: "0 0 14px 14px",
+                                                            animation: "fadeInDown 0.3s ease"
+                                                        }}>
+                                                            <div style={{ maxWidth: "300px" }}>
+                                                                <label className="form-label" style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
+                                                                    Max Chat/msg limit <span style={{ color: "var(--text-secondary)", fontWeight: 400 }}>-1 = unlimited, 0 = disabled</span>
+                                                                </label>
+                                                                <input
+                                                                    type="number"
+                                                                    className="form-input"
+                                                                    min="-1"
+                                                                    value={formData.current_limit_chat_messages !== undefined ? formData.current_limit_chat_messages : 0}
+                                                                    onChange={e => setFormData(p => ({ ...p, current_limit_chat_messages: Number(e.target.value) }))}
+                                                                />
+                                                                <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "6px", marginBottom: 0 }}>Limit messages sent within chat rooms.</p>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
                                     </div>
                                 </div>
                             )}

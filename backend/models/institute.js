@@ -63,6 +63,10 @@ const Institute = sequelize.define("Institute", {
         type: DataTypes.BOOLEAN,
         defaultValue: false
     },
+    current_feature_expenses: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
+    },
     current_feature_salary: {
         type: DataTypes.BOOLEAN,
         defaultValue: false
@@ -106,13 +110,21 @@ const Institute = sequelize.define("Institute", {
     },
     current_feature_assignment: {
         type: DataTypes.BOOLEAN,
-        defaultValue: false
+        allowNull: true
+    },
+    current_feature_performance_hub: {
+        type: DataTypes.BOOLEAN,
+        allowNull: true
     },
     current_feature_transport: {
         type: DataTypes.BOOLEAN,
         defaultValue: false
     },
     current_feature_mobile_app: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
+    },
+    current_feature_chat: {
         type: DataTypes.BOOLEAN,
         defaultValue: false
     },
@@ -141,6 +153,10 @@ const Institute = sequelize.define("Institute", {
     current_limit_ai_messages: {
         type: DataTypes.INTEGER,
         defaultValue: 50
+    },
+    current_limit_chat_messages: {
+        type: DataTypes.INTEGER,
+        defaultValue: 500
     },
     current_feature_push_notifications: {
         type: DataTypes.BOOLEAN,

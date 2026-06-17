@@ -9,6 +9,7 @@ import { AuthContext } from "../../context/AuthContext";
 import ThemeSelector from "../../components/ThemeSelector";
 import { Link, useNavigate } from "react-router-dom";
 import api from "../../services/api";
+import AdvancedStatCard from "../../components/common/AdvancedStatCard";
 import "../admin/Dashboard.css";
 import "../../components/common/Buttons.css";
 
@@ -76,7 +77,7 @@ function SuperAdminDashboard() {
     const safeRevenue = Number(stats.totalRevenue) || 0;
     const safeMonthly = Number(stats.monthlyRevenue) || 0;
     const safeDiscount = Number(stats.totalDiscount) || 0;
-
+
     return (
         <div className="dashboard-container">
             <div className="dashboard-header">
@@ -94,28 +95,28 @@ function SuperAdminDashboard() {
             </div>
 
             {/* ── Statistics Grid ── */}
-            <div className="stats-grid">
+            <div className="stats-grid advanced-stats-grid">
                 {[
-                    { icon: '🏢', value: stats.totalInstitutes, label: 'Total Institutes', color: '#6366f1' },
-                    { icon: '✅', value: stats.activeInstitutes, label: 'Active Institutes', color: '#10b981' },
-                    { icon: '👨‍🎓', value: stats.totalStudents, label: 'Total Students', color: '#8b5cf6' },
-                    { icon: '👩‍🏫', value: stats.totalFaculty, label: 'Total Faculty', color: '#ec4899' },
-                    { icon: '🧑‍💼', value: stats.totalManagers, label: 'Total Managers', color: '#14b8a6' },
-                    { icon: '🏫', value: stats.totalPrivateSchools, label: 'Private Schools', color: '#f97316' },
-                    { icon: '🆓', value: stats.totalFreeTrialUsers, label: 'Free Trial Users', color: '#84cc16' },
-                    { icon: '🎉', value: `₹${Number(stats.totalDiscount||0).toLocaleString('en-IN')}`, label: 'Platform Discounts', color: '#a855f7' },
-                    { icon: '📋', value: stats.totalPlans, label: 'Active Plans', color: '#06b6d4' },
-                    { icon: '💎', value: stats.lifetime?.total_lifetime_institutes || 0, label: 'Lifetime Members', color: '#7c3aed' },
-                    { icon: '🌟', value: stats.lifetime?.founding_members || 0, label: 'Founding Members', color: '#f59e0b' },
-                    { icon: '🔓', value: stats.lifetime?.slots_remaining || 0, label: 'Slots Remaining', color: '#ef4444' },
+                    { icon: '🏢', value: stats.totalInstitutes, label: 'Total Institutes', colorClass: 'asc-indigo' },
+                    { icon: '✅', value: stats.activeInstitutes, label: 'Active Institutes', colorClass: 'asc-green' },
+                    { icon: '👨‍🎓', value: stats.totalStudents, label: 'Total Students', colorClass: 'asc-purple' },
+                    { icon: '👩‍🏫', value: stats.totalFaculty, label: 'Total Faculty', colorClass: 'asc-pink' },
+                    { icon: '🧑‍💼', value: stats.totalManagers, label: 'Total Managers', colorClass: 'asc-cyan' },
+                    { icon: '🏫', value: stats.totalPrivateSchools, label: 'Private Schools', colorClass: 'asc-orange' },
+                    { icon: '🆓', value: stats.totalFreeTrialUsers, label: 'Free Trial Users', colorClass: 'asc-yellow' },
+                    { icon: '🎉', value: `₹${Number(stats.totalDiscount||0).toLocaleString('en-IN')}`, label: 'Platform Discounts', colorClass: 'asc-blue' },
+                    { icon: '📋', value: stats.totalPlans, label: 'Active Plans', colorClass: 'asc-indigo' },
+                    { icon: '💎', value: stats.lifetime?.total_lifetime_institutes || 0, label: 'Lifetime Members', colorClass: 'asc-purple' },
+                    { icon: '🌟', value: stats.lifetime?.founding_members || 0, label: 'Founding Members', colorClass: 'asc-yellow' },
+                    { icon: '🔓', value: stats.lifetime?.slots_remaining || 0, label: 'Slots Remaining', colorClass: 'asc-red' },
                 ].map(s => (
-                    <div key={s.label} className="stat-card" style={{ borderTop: `3px solid ${s.color}` }}>
-                        <div className="stat-icon" style={{ background: `linear-gradient(135deg, ${s.color}22 0%, ${s.color}11 100%)`, color: s.color, boxShadow: `0 4px 12px ${s.color}33`, fontSize: '2rem' }}>{s.icon}</div>
-                        <div className="stat-content">
-                            <h3>{s.value}</h3>
-                            <p style={{ fontWeight: '600', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{s.label}</p>
-                        </div>
-                    </div>
+                    <AdvancedStatCard
+                        key={s.label}
+                        icon={s.icon}
+                        colorClass={s.colorClass}
+                        label={s.label}
+                        value={s.value}
+                    />
                 ))}
             </div>
 
@@ -235,6 +236,20 @@ function SuperAdminDashboard() {
                         <div className="action-icon">🔧</div>
                         <h3>Institute Limits</h3>
                         <p>Customize per-institute features & limits</p>
+                    </Link>
+                    <Link to="/superadmin/enquiries" className="action-card" style={{ textDecoration: 'none', position: 'relative' }}>
+                        {stats.unreadEnquiriesCount > 0 && (
+                            <span style={{
+                                position: 'absolute', top: '12px', right: '12px', background: '#ef4444', color: '#fff',
+                                borderRadius: '50%', width: '24px', height: '24px', display: 'flex', alignItems: 'center',
+                                justifyContent: 'center', fontSize: '12px', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+                            }}>
+                                {stats.unreadEnquiriesCount}
+                            </span>
+                        )}
+                        <div className="action-icon">📬</div>
+                        <h3>Enquiries</h3>
+                        <p>View contact & demo requests</p>
                     </Link>
                 </div>
             </div>

@@ -32,7 +32,19 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https://res.cloudinary.com", "https://*.cloudinary.com", "blob:"],
-      connectSrc: ["'self'", "https://api.razorpay.com", "https://lumberjack.razorpay.com", process.env.FRONTEND_URL].filter(Boolean),
+      connectSrc: [
+        "'self'",
+        "https://api.razorpay.com",
+        "https://lumberjack.razorpay.com",
+        process.env.FRONTEND_URL,
+        // Custom domain variants
+        "https://zenithflows.in",
+        "https://www.zenithflows.in",
+        // All allowed origins from env
+        ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",").map(o => o.trim()) : []),
+        // Backend itself (Render)
+        "https://coaching-management-system-24xn.onrender.com",
+      ].filter(Boolean),
       frameSrc: ["https://api.razorpay.com", "https://checkout.razorpay.com"],
       objectSrc: ["'none'"],
       upgradeInsecureRequests: process.env.NODE_ENV === "production" ? [] : null,
@@ -133,9 +145,11 @@ app.use("/api/auth/resend-otp", otpLimiter);
  * ✅ Phase 7: Environment-Aware CORS Configuration
  * Production: only allow origins from ALLOWED_ORIGINS env var
  * Development: allow localhost variants + Vercel preview branches
+ *
+ * IMPORTANT: ALLOWED_ORIGINS must be set on Render with ALL allowed domains:
+ *   ALLOWED_ORIGINS=https://coaching-management-system-lemon.vercel.app,https://zenithflows.in,https://www.zenithflows.in
  */
 const buildAllowedOrigins = () => {
-  // If ALLOWED_ORIGINS is set (production), use ONLY those origins
   if (process.env.ALLOWED_ORIGINS) {
     return process.env.ALLOWED_ORIGINS.split(",").map(o => o.trim()).filter(Boolean);
   }
@@ -154,24 +168,62 @@ const buildAllowedOrigins = () => {
 const allowedOrigins = buildAllowedOrigins();
 const isProduction = !!process.env.ALLOWED_ORIGINS;
 
+// Custom-domain root: allow any origin that ends with our root domain
+// e.g. zenithflows.in AND www.zenithflows.in AND any future subdomain
+const CUSTOM_DOMAIN = process.env.CUSTOM_DOMAIN || "zenithflows.in";
+
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, Postman, server-to-server)
     if (!origin) return callback(null, true);
-    // Exact match
+
+    // Exact match against whitelist
     if (allowedOrigins.includes(origin)) return callback(null, true);
-    // In dev only: allow Vercel preview URLs
-    if (!isProduction && origin.endsWith(".vercel.app")) return callback(null, true);
-    // In dev only: allow capacitor origins
-    if (!isProduction && origin.startsWith("capacitor://")) return callback(null, true);
+
+    // Always allow the custom domain and all its subdomains (www, app, student, etc.)
+    // This is safe because the CUSTOM_DOMAIN is our own controlled domain
+    if (
+      origin === `https://${CUSTOM_DOMAIN}` ||
+      origin === `http://${CUSTOM_DOMAIN}` ||
+      origin.endsWith(`.${CUSTOM_DOMAIN}`)
+    ) {
+      return callback(null, true);
+    }
+
+    // In dev only: allow Vercel preview URLs, capacitor, and localhost subdomains
+    if (!isProduction) {
+      if (origin.endsWith(".vercel.app")) return callback(null, true);
+      if (origin.startsWith("capacitor://")) return callback(null, true);
+      // Allow local subdomains for multi-tenant dev (e.g., http://it-hub.localhost:5173)
+      if (origin.includes(".localhost:")) return callback(null, true);
+    }
+
     // Blocked
+    console.warn(`[CORS] Blocked origin: ${origin}`);
     callback(new Error(`Not allowed by CORS: ${origin}`));
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "sentry-trace", "baggage", "X-Requested-With"],
+  exposedHeaders: ["Content-Range", "X-Content-Range"],
   maxAge: 86400, // Cache preflight for 24 hours
 }));
+
+// Handle OPTIONS preflight for all routes explicitly (belt-and-suspenders)
+app.options("*", cors());
+
+// ============================================
+// ✅ PHASE A — STEP A4: SUBDOMAIN MIDDLEWARE
+// ============================================
+// Extracts the institute subdomain from every request hostname.
+// Production: iitcoaching.zenithflows.in → req.subdomain = 'iitcoaching'
+// Local dev:  localhost → req.subdomain = null (no subdomain in dev)
+// This enables future subdomain-based routing without changing existing routes.
+const { extractSubdomain } = require("./utils/subdomain");
+app.use((req, res, next) => {
+    req.subdomain = extractSubdomain(req.hostname);
+    next();
+});
 
 
 /**
@@ -308,6 +360,7 @@ app.use("/api/parents", require("./routes/parent.routes"));
 app.use("/api/biometric", require("./routes/biometric.routes"));
 app.use("/api/notes", require("./routes/note.routes"));
 app.use("/api/assignments", require("./routes/assignment.routes"));
+app.use("/api/performance", require("./routes/performance.routes")); // ✅ Student Performance System
 
 // Public Web Page routes
 app.use("/api/admin/public-page", require("./routes/publicPage.routes"));
@@ -433,6 +486,10 @@ const syncDatabase = async () => {
     console.log("Startup schema migrations enabled via RUN_STARTUP_MIGRATIONS=true");
 
     try {
+      await sequelize.query(`ALTER TABLE subjects ADD COLUMN IF NOT EXISTS code VARCHAR(50) DEFAULT NULL;`);
+    } catch (e) { }
+
+    try {
       await sequelize.query(`ALTER TABLE students ADD COLUMN is_full_course BOOLEAN DEFAULT false;`);
     } catch (e) { }
 
@@ -477,6 +534,7 @@ const syncDatabase = async () => {
     try { await sequelize.query(`ALTER TABLE plans ADD COLUMN feature_transport_fees BOOLEAN DEFAULT false;`); } catch (e) { }
     try { await sequelize.query(`ALTER TABLE plans ADD COLUMN feature_finance BOOLEAN DEFAULT false;`); } catch (e) { }
     try { await sequelize.query(`ALTER TABLE institutes ADD COLUMN current_feature_finance BOOLEAN DEFAULT false;`); } catch (e) { }
+    try { await sequelize.query(`ALTER TABLE institutes ADD COLUMN current_feature_expenses BOOLEAN DEFAULT false;`); } catch (e) { }
     try { await sequelize.query(`ALTER TABLE institutes ADD COLUMN current_feature_salary BOOLEAN DEFAULT false;`); } catch (e) { }
     try { await sequelize.query(`ALTER TABLE institutes ADD COLUMN current_feature_mobile_app BOOLEAN DEFAULT false;`); } catch (e) { }
     console.log("âœ… Finance & Mobile module feature columns ensured");
@@ -553,9 +611,90 @@ const syncDatabase = async () => {
       console.error('Error adding Student Password columns:', e.message);
     }
 
+    // ── Dashboard Unread Tracking ─────────────────────────────────────
+    try {
+      await sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_assignment_seen_at TIMESTAMPTZ;`);
+      await sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_note_seen_at TIMESTAMPTZ;`);
+      await sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_enquiry_seen_at TIMESTAMPTZ;`);
+      console.log('✅ Dashboard Unread Tracking columns ensured');
+    } catch (e) {
+      console.error('Error adding Dashboard Unread Tracking columns:', e.message);
+    }
+
+    // ── Exam Result System (Approach B) ──────────────────────────────────────
+    // Using VARCHAR(20) for exam_type — avoids PostgreSQL ENUM type creation issues
+    // Same pattern as marked_by_type on attendances table
+    try { await sequelize.query(`ALTER TABLE exams ADD COLUMN IF NOT EXISTS exam_type VARCHAR(20) NOT NULL DEFAULT 'unit_test';`); } catch (e) { }
+    try { await sequelize.query(`ALTER TABLE exams ADD COLUMN IF NOT EXISTS marks_locked BOOLEAN NOT NULL DEFAULT FALSE;`); } catch (e) { }
+    try { await sequelize.query(`ALTER TABLE exams ADD COLUMN IF NOT EXISTS marks_locked_at TIMESTAMPTZ NULL;`); } catch (e) { }
+    try { await sequelize.query(`ALTER TABLE exams ADD COLUMN IF NOT EXISTS marks_locked_by INTEGER NULL;`); } catch (e) { }
+    try { await sequelize.query(`ALTER TABLE marks ADD COLUMN IF NOT EXISTS is_absent BOOLEAN NOT NULL DEFAULT FALSE;`); } catch (e) { }
+    try { await sequelize.query(`ALTER TABLE marks ADD COLUMN IF NOT EXISTS remarks VARCHAR(200) NULL;`); } catch (e) { }
+    // Performance indexes for RANK() window function queries
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_marks_exam_id ON marks(exam_id);`); } catch (e) { }
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_marks_student_id ON marks(student_id);`); } catch (e) { }
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_exams_locked ON exams(marks_locked);`); } catch (e) { }
+    console.log('✅ Exam Result System columns ensured');
+
+    // ── Timetable Slots per Class ──────────────────────────────────────
+    try {
+      await sequelize.query(`ALTER TABLE timetable_slots ADD COLUMN IF NOT EXISTS class_id INTEGER REFERENCES classes(id) ON DELETE CASCADE;`);
+      console.log('✅ Timetable Slots class_id column ensured');
+    } catch (e) {
+      console.error('Error adding class_id to timetable_slots:', e.message);
+    }
+
+    // ── Break Support for Timetable ──────────────────────────────────────
+    try {
+      await sequelize.query(`ALTER TABLE timetables ADD COLUMN IF NOT EXISTS is_break BOOLEAN NOT NULL DEFAULT FALSE;`);
+      await sequelize.query(`ALTER TABLE timetables ADD COLUMN IF NOT EXISTS break_label VARCHAR(100) DEFAULT NULL;`);
+      await sequelize.query(`ALTER TABLE timetables ALTER COLUMN subject_id DROP NOT NULL;`);
+      await sequelize.query(`ALTER TABLE timetables ALTER COLUMN faculty_id DROP NOT NULL;`);
+      console.log('✅ Timetable break columns ensured');
+    } catch (e) {
+      console.error('Error adding break columns to timetables:', e.message);
+    }
+
+    // ── Chat Message Limit (Subscription Plan Feature) ────────────────────────
+    try { await sequelize.query(`ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_chat_messages INTEGER NOT NULL DEFAULT 500;`); } catch (e) { }
+    try { await sequelize.query(`ALTER TABLE institutes ADD COLUMN IF NOT EXISTS current_limit_chat_messages INTEGER DEFAULT 500;`); } catch (e) { }
+    try { await sequelize.query(`ALTER TABLE institutes ADD COLUMN IF NOT EXISTS current_feature_chat BOOLEAN DEFAULT FALSE;`); } catch (e) { }
+    console.log('✅ Chat message limit columns ensured');
+
+    // ── Faculty Salary Management — Phase 1 DB (Faculty Salary.md) ──────────
+    // Add new columns to faculty_salaries (payment_due_date, salary_slip_url, auto_generated)
+    try { await sequelize.query(`ALTER TABLE faculty_salaries ADD COLUMN IF NOT EXISTS payment_due_date DATE NULL;`); } catch (e) { }
+    try { await sequelize.query(`ALTER TABLE faculty_salaries ADD COLUMN IF NOT EXISTS salary_slip_url VARCHAR(500) NULL;`); } catch (e) { }
+    try { await sequelize.query(`ALTER TABLE faculty_salaries ADD COLUMN IF NOT EXISTS auto_generated BOOLEAN NOT NULL DEFAULT FALSE;`); } catch (e) { }
+    // Performance indexes for faculty_salaries
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_fs_institute_month ON faculty_salaries(institute_id, month_year);`); } catch (e) { }
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_fs_faculty_month ON faculty_salaries(faculty_id, month_year);`); } catch (e) { }
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_fs_status ON faculty_salaries(institute_id, status);`); } catch (e) { }
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_fs_due_date ON faculty_salaries(payment_due_date);`); } catch (e) { }
+    // Create faculty_salary_settings table (base salary per faculty, used by auto-generate cron)
+    try {
+      await sequelize.query(`
+        CREATE TABLE IF NOT EXISTS faculty_salary_settings (
+          id                    SERIAL PRIMARY KEY,
+          institute_id          INT NOT NULL REFERENCES institutes(id) ON DELETE CASCADE,
+          faculty_id            INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          basic_salary          DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+          allowances            DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+          salary_due_day        SMALLINT NOT NULL DEFAULT 5,
+          working_days_default  SMALLINT NOT NULL DEFAULT 26,
+          is_active             BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at            TIMESTAMPTZ DEFAULT NOW(),
+          updated_at            TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE (faculty_id, institute_id)
+        );
+      `);
+    } catch (e) { /* table already exists */ }
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_fss_institute ON faculty_salary_settings(institute_id);`); } catch (e) { }
+    console.log('✅ Faculty Salary Management schema ensured (payment_due_date, settings table, indexes)');
+
     // Auto-sync other schema changes using alter for the explicit models to make sure everything matches
     try {
-      const { InstitutePublicProfile, InstituteGalleryPhoto, InstituteReview, PublicEnquiry, Subscription, Plan, User, LandingPageView, Coupon, AddOn, InstituteAddOn, SubscriptionEvent, UsageTracker } = require('./models');
+      const { Institute, InstitutePublicProfile, InstituteGalleryPhoto, InstituteReview, PublicEnquiry, Subscription, Plan, User, LandingPageView, Coupon, AddOn, InstituteAddOn, SubscriptionEvent, UsageTracker } = require('./models');
       await InstitutePublicProfile.sync({ alter: true });
       await InstituteGalleryPhoto.sync({ alter: true });
       await InstituteReview.sync({ alter: true });
@@ -571,7 +710,8 @@ const syncDatabase = async () => {
       await SubscriptionEvent.sync({ alter: true });
       
       await Plan.sync({ alter: true });
-      await User.sync({ alter: true });  // âœ… picks up manager_type + manager_type_label
+      await Institute.sync({ alter: true }); // ✅ picks up current_limit_chat_messages
+      await User.sync({ alter: true });  // ✅ picks up manager_type + manager_type_label
       await LandingPageView.sync({ alter: true });
     } catch (e) { console.error("Error auto-syncing explicit models:", e); }
     } else {
@@ -614,6 +754,20 @@ const syncDatabase = async () => {
 
     // Exams - institute + class lookups
     try { await sequelize.query(`CREATE INDEX idx_exams_inst ON exams(institute_id, class_id);`); } catch (e) { }
+
+    // ── Chat Performance Indexes (Phase 3: Chat Optimization) ──────────────────
+    // chat_messages: most queried table — full table scans without these
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_chatmsg_room_created ON chat_messages(room_id, created_at DESC);`); } catch (e) { }
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_chatmsg_sender ON chat_messages(sender_id);`); } catch (e) { }
+    // chat_participants: queried on every room load and unread count
+    try { await sequelize.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_chatpart_room_user ON chat_participants(room_id, user_id);`); } catch (e) { }
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_chatpart_user ON chat_participants(user_id);`); } catch (e) { }
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_chatpart_lastread ON chat_participants(user_id, last_read_at);`); } catch (e) { }
+    // chat_rooms: always filtered by institute_id
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_chatroom_institute ON chat_rooms(institute_id, type);`); } catch (e) { }
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_chatroom_faculty ON chat_rooms(faculty_id);`); } catch (e) { }
+    try { await sequelize.query(`CREATE INDEX IF NOT EXISTS idx_chatroom_subject ON chat_rooms(subject_id);`); } catch (e) { }
+    console.log("✅ Chat performance indexes verified/created");
 
     console.log("âœ… Phase 2.2: Performance indexes verified/created");
     }

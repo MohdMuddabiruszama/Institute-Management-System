@@ -5,15 +5,18 @@ const {
     Exam, Mark, ClassSession, Expense, Assignment, StudentParent,
     InstituteDiscount,
     // All models needed for cascade delete
-    StudentSubject, StudentClass, StudentFee, StudentFeePayment,
-    FeeDiscountLog, FacultyAttendance, FacultySalary,
-    Timetable, TimetableSlot, Note, NoteDownload,
+    StudentFee, StudentFeePayment, AssignmentSubmission,
     ChatRoom, ChatMessage, ChatParticipant,
-    BiometricDevice, BiometricEnrollment, BiometricPunch, BiometricSettings,
-    AssignmentSubmission, AssignmentSubmissionHistory, AssignmentSetting,
-    RazorpayOrder, RazorpayPayment, Invoice,
-    InstitutePublicProfile, InstituteGalleryPhoto, InstituteReview,
-    PublicEnquiry, TransportFee
+    Timetable, TimetableSlot,
+    BiometricDevice, BiometricPunch, BiometricEnrollment,
+    Note, NoteDownload,
+    InstitutePublicProfile, InstituteGalleryPhoto, InstituteReview, PublicEnquiry,
+    RazorpayOrder, RazorpayPayment, Invoice, FeeDiscountLog,
+    FacultyAttendance, FacultySalary, AssignmentSetting,
+    StudentClass, StudentSubject, TransportFee,
+    BiometricSettings, AssignmentSubmissionHistory,
+    SlowRequestLog, AuditLog, BulkImportLog, UsageTracker, InstituteAddOn, SubscriptionEvent,
+    Lead
 } = require("../models");
 const { Op, fn, col, literal } = require("sequelize");
 
@@ -22,68 +25,79 @@ const { Op, fn, col, literal } = require("sequelize");
 // ─────────────────────────────────────────────────────────────
 exports.getDashboardStats = async (req, res) => {
     try {
-        const totalInstitutes = await Institute.count();
-        const activeInstitutes = await Institute.count({ where: { status: "active" } });
-        const expiredInstitutes = await Institute.count({ where: { status: "expired" } });
-        const totalStudents = await Student.count();
-        const totalFaculty = await Faculty.count();
-
-        // Total Managers (users with role = manager)
-        const totalManagers = await User.count({ where: { role: "manager" } });
-
-        // Total Parents
-        const totalParents = await User.count({ where: { role: "parent" } });
-
-        // Total Revenue: Sum of all paid subscription amount_paid
-        const revenueResult = await Subscription.findAll({
-            attributes: [[fn("SUM", col("amount_paid")), "total"]],
-            where: { payment_status: "paid" }
-        });
-        const totalRevenue = parseFloat(revenueResult[0]?.dataValues?.total || 0);
-
-        // Monthly Revenue: Current month revenue
         const now = new Date();
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        const monthRevenueResult = await Subscription.findAll({
-            attributes: [[fn("SUM", col("amount_paid")), "total"]],
-            where: {
-                payment_status: "paid",
-                createdAt: { [Op.gte]: monthStart }
-            }
-        });
+
+        // ✅ Phase A Bonus: Run all independent queries in parallel
+        // Group 1: Core counts — 7 queries fired simultaneously
+        const [
+            totalInstitutes,
+            activeInstitutes,
+            expiredInstitutes,
+            totalStudents,
+            totalFaculty,
+            totalManagers,
+            totalParents,
+        ] = await Promise.all([
+            Institute.count(),
+            Institute.count({ where: { status: "active" } }),
+            Institute.count({ where: { status: "expired" } }),
+            Student.count(),
+            Faculty.count(),
+            User.count({ where: { role: "manager" } }),
+            User.count({ where: { role: "parent" } }),
+        ]);
+
+        // Group 2: Revenue + plan data — fired simultaneously
+        const [revenueResult, monthRevenueResult, totalPlans, freePlan] = await Promise.all([
+            Subscription.findAll({
+                attributes: [[fn("SUM", col("amount_paid")), "total"]],
+                where: { payment_status: "paid" }
+            }),
+            Subscription.findAll({
+                attributes: [[fn("SUM", col("amount_paid")), "total"]],
+                where: {
+                    payment_status: "paid",
+                    createdAt: { [Op.gte]: monthStart }
+                }
+            }),
+            Plan.count({ where: { status: "active" } }),
+            Plan.findOne({ where: { price: 0 } }),
+        ]);
+
+        const totalRevenue = parseFloat(revenueResult[0]?.dataValues?.total || 0);
         const monthlyRevenue = parseFloat(monthRevenueResult[0]?.dataValues?.total || 0);
 
-        // Total Features = number of unique feature flags = count of plans with active=status
-        const totalPlans = await Plan.count({ where: { status: "active" } });
-
-        // Total Private Schools = institutes that have subscription (i.e., active/paying)
-        const totalPrivateSchools = await Institute.count({
-            where: { status: { [Op.in]: ["active", "expired"] } }
-        });
-
-        // Total "Start Free Trial" users = subscriptions with payment_status='free_trial' OR institutes on plan id=1 (Starter, price=0)
-        const freePlan = await Plan.findOne({ where: { price: 0 } });
-        let totalFreeTrialUsers = 0;
-        if (freePlan) {
-            totalFreeTrialUsers = await Subscription.count({
-                where: { plan_id: freePlan.id }
-            });
-        }
-
-        // Phase 3: Total Platform Discounts (Student Fees + Institute Subscriptions)
+        // Group 3: Derived queries (need freePlan result first)
         const { StudentFee, Subscription: SubModel, LandingPageView } = require("../models");
-        const [studentDiscountRes, subDiscountRes] = await Promise.all([
-            StudentFee.sum("discount_amount") || 0,
-            SubModel.sum("discount_amount") || 0
+        const freePlanId = freePlan?.id;
+
+        const [
+            totalPrivateSchools,
+            totalFreeTrialUsers,
+            studentDiscountRes,
+            subDiscountRes,
+            totalLandingPageViews,
+            totalLifetimeInstitutes,
+            totalFoundingMembers,
+            lifetimePlan,
+            unreadEnquiriesCount,
+        ] = await Promise.all([
+            Institute.count({ where: { status: { [Op.in]: ["active", "expired"] } } }),
+            freePlanId
+                ? Subscription.count({ where: { plan_id: freePlanId } })
+                : Promise.resolve(0),
+            StudentFee.sum("discount_amount"),
+            SubModel.sum("discount_amount"),
+            LandingPageView.count(),
+            Institute.count({ where: { is_lifetime_member: true } }),
+            Institute.count({ where: { founding_member: true } }),
+            Plan.findOne({ where: { is_lifetime: true } }),
+            Lead.count({ where: { is_read: false } }),
         ]);
-        const totalDiscount = parseFloat(studentDiscountRes) + parseFloat(subDiscountRes);
 
-        const totalLandingPageViews = await LandingPageView.count();
-
-        // === Lifetime Member Stats ===
-        const totalLifetimeInstitutes = await Institute.count({ where: { is_lifetime_member: true } });
-        const totalFoundingMembers = await Institute.count({ where: { founding_member: true } });
-        const lifetimePlan = await Plan.findOne({ where: { is_lifetime: true } });
+        const totalDiscount =
+            parseFloat(studentDiscountRes || 0) + parseFloat(subDiscountRes || 0);
 
         res.json({
             totalInstitutes,
@@ -100,6 +114,7 @@ exports.getDashboardStats = async (req, res) => {
             totalFreeTrialUsers,
             totalDiscount,
             totalLandingPageViews,
+            unreadEnquiriesCount,
             // Lifetime stats
             lifetime: {
                 total_lifetime_institutes: totalLifetimeInstitutes,
@@ -107,15 +122,20 @@ exports.getDashboardStats = async (req, res) => {
                 standard_lifetime: totalLifetimeInstitutes - totalFoundingMembers,
                 slots_used: lifetimePlan?.lifetime_slots_used || 0,
                 slots_total: lifetimePlan?.lifetime_slots_total || 100,
-                slots_remaining: (lifetimePlan?.lifetime_slots_total || 100) - (lifetimePlan?.lifetime_slots_used || 0),
-                total_lifetime_revenue: totalFoundingMembers * 19999 + (totalLifetimeInstitutes - totalFoundingMembers) * 24999
-            }
+                slots_remaining:
+                    (lifetimePlan?.lifetime_slots_total || 100) -
+                    (lifetimePlan?.lifetime_slots_used || 0),
+                total_lifetime_revenue:
+                    totalFoundingMembers * 19999 +
+                    (totalLifetimeInstitutes - totalFoundingMembers) * 24999,
+            },
         });
     } catch (error) {
         console.error("getDashboardStats error:", error);
         res.status(500).json({ error: error.message });
     }
 };
+
 
 // ─────────────────────────────────────────────────────────────
 // PHASE 2: ENHANCED ANALYTICS (with managers)
@@ -216,7 +236,10 @@ exports.getInstituteDetails = async (req, res) => {
             totalAssignments,
             totalParents,
             latestSubscription,
-            discounts
+            discounts,
+            totalExams,
+            totalNotes,
+            storageTracker
         ] = await Promise.all([
             Student.count({ where: { institute_id: id } }),
             Faculty.count({ where: { institute_id: id } }),
@@ -244,7 +267,10 @@ exports.getInstituteDetails = async (req, res) => {
                 where: { institute_id: id },
                 order: [["createdAt", "DESC"]],
                 include: [{ model: User, as: "approver", attributes: ["name"] }]
-            })
+            }),
+            Exam.count({ where: { institute_id: id } }),
+            Note.count({ where: { institute_id: id } }),
+            UsageTracker.findOne({ where: { institute_id: id, metric: "storage_mb" } })
         ]);
 
         // Count enabled features in current institute config
@@ -284,7 +310,10 @@ exports.getInstituteDetails = async (req, res) => {
                 totalSubjects,
                 totalAssignments,
                 totalParents,
-                totalFeatures
+                totalFeatures,
+                totalExams,
+                totalNotes,
+                storageUsed: storageTracker ? storageTracker.current_value : 0
             },
             latestSubscription,
             discounts: discounts || []
@@ -308,11 +337,13 @@ exports.updateInstituteLimits = async (req, res) => {
             current_limit_faculty,
             current_limit_classes,
             current_limit_admins,
+            current_limit_chat_messages,
             // Feature overrides
             current_feature_attendance,
             current_feature_auto_attendance,
             current_feature_fees,
             current_feature_finance,
+            current_feature_expenses,
             current_feature_salary,
             current_feature_reports,
             current_feature_announcements,
@@ -324,8 +355,10 @@ exports.updateInstituteLimits = async (req, res) => {
             current_feature_api_access,
             current_feature_public_page,
             current_feature_assignment,
+            current_feature_performance_hub,
             current_feature_transport,
-            current_feature_mobile_app
+            current_feature_mobile_app,
+            current_feature_chat
         } = req.body;
 
         const { Plan } = require("../models");
@@ -337,10 +370,12 @@ exports.updateInstituteLimits = async (req, res) => {
         if (current_limit_faculty !== undefined) updates.current_limit_faculty = parseInt(current_limit_faculty);
         if (current_limit_classes !== undefined) updates.current_limit_classes = parseInt(current_limit_classes);
         if (current_limit_admins !== undefined) updates.current_limit_admins = parseInt(current_limit_admins);
+        if (current_limit_chat_messages !== undefined) updates.current_limit_chat_messages = parseInt(current_limit_chat_messages);
         if (current_feature_attendance !== undefined) updates.current_feature_attendance = current_feature_attendance;
         if (current_feature_auto_attendance !== undefined) updates.current_feature_auto_attendance = !!current_feature_auto_attendance;
         if (current_feature_fees !== undefined) updates.current_feature_fees = !!current_feature_fees;
         if (current_feature_finance !== undefined) updates.current_feature_finance = !!current_feature_finance;
+        if (current_feature_expenses !== undefined) updates.current_feature_expenses = !!current_feature_expenses;
         if (current_feature_salary !== undefined) updates.current_feature_salary = !!current_feature_salary;
         if (current_feature_reports !== undefined) updates.current_feature_reports = current_feature_reports;
         if (current_feature_announcements !== undefined) updates.current_feature_announcements = !!current_feature_announcements;
@@ -352,8 +387,10 @@ exports.updateInstituteLimits = async (req, res) => {
         if (current_feature_api_access !== undefined) updates.current_feature_api_access = !!current_feature_api_access;
         if (current_feature_public_page !== undefined) updates.current_feature_public_page = !!current_feature_public_page;
         if (current_feature_assignment !== undefined) updates.current_feature_assignment = !!current_feature_assignment;
+        if (current_feature_performance_hub !== undefined) updates.current_feature_performance_hub = !!current_feature_performance_hub;
         if (current_feature_transport !== undefined) updates.current_feature_transport = !!current_feature_transport;
         if (current_feature_mobile_app !== undefined) updates.current_feature_mobile_app = !!current_feature_mobile_app;
+        if (current_feature_chat !== undefined) updates.current_feature_chat = !!current_feature_chat;
 
         // Add 1-month expiration for manually unlocked Add-on features
         let expiries = {};
@@ -362,11 +399,11 @@ exports.updateInstituteLimits = async (req, res) => {
         } catch(e) {}
         
         const booleanFeatures = [
-            'current_feature_auto_attendance', 'current_feature_fees', 'current_feature_finance',
+            'current_feature_auto_attendance', 'current_feature_fees', 'current_feature_finance', 'current_feature_expenses',
             'current_feature_salary', 'current_feature_announcements', 'current_feature_export',
             'current_feature_timetable', 'current_feature_whatsapp', 'current_feature_custom_branding',
             'current_feature_multi_branch', 'current_feature_api_access', 'current_feature_public_page',
-            'current_feature_assignment', 'current_feature_transport', 'current_feature_mobile_app'
+            'current_feature_assignment', 'current_feature_performance_hub', 'current_feature_transport', 'current_feature_mobile_app', 'current_feature_chat'
         ];
 
         booleanFeatures.forEach(feature => {
@@ -402,12 +439,18 @@ exports.updateInstituteLimits = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 // EXISTING: updateInstituteStatus
 // ─────────────────────────────────────────────────────────────
+const { clearInstituteCache } = require("../middlewares/auth.middleware");
+
 exports.updateInstituteStatus = async (req, res) => {
     try {
         const { id } = req.params;
         const { status } = req.body;
 
         await Institute.update({ status }, { where: { id } });
+        
+        // Immediately invalidate cache so suspended institutes are blocked in real-time
+        clearInstituteCache(parseInt(id, 10));
+        
         res.json({ message: "Institute status updated" });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -601,6 +644,15 @@ exports.deleteInstitute = async (req, res) => {
         // Note: parent users (role = 'parent') linked via StudentParent
         // are NOT deleted to preserve their accounts (they may be linked elsewhere).
         // Only users directly belonging to this institute (admin, manager, faculty, student) are removed.
+        
+        // Logs and trackers that may reference users
+        await SlowRequestLog.destroy({ where: { institute_id: id }, transaction: t });
+        await AuditLog.destroy({ where: { institute_id: id }, transaction: t });
+        await BulkImportLog.destroy({ where: { institute_id: id }, transaction: t });
+        await UsageTracker.destroy({ where: { institute_id: id }, transaction: t });
+        await InstituteAddOn.destroy({ where: { institute_id: id }, transaction: t });
+        await SubscriptionEvent.destroy({ where: { institute_id: id }, transaction: t });
+
         await User.destroy({
             where: {
                 institute_id: id,
@@ -674,7 +726,7 @@ exports.suspendInstitute = async (req, res) => {
 
         // Clear cache so it takes effect instantly
         const { clearInstituteCache } = require("../middlewares/auth.middleware");
-        if (typeof clearInstituteCache === "function") clearInstituteCache(id);
+        if (typeof clearInstituteCache === "function") clearInstituteCache(parseInt(id, 10));
 
         // Log the action
         console.log(`[SUSPEND] Institute: ${institute.name} (ID: ${id})`, {
@@ -714,7 +766,7 @@ exports.restoreInstitute = async (req, res) => {
 
         // Clear cache so it takes effect instantly
         const { clearInstituteCache } = require("../middlewares/auth.middleware");
-        if (typeof clearInstituteCache === "function") clearInstituteCache(id);
+        if (typeof clearInstituteCache === "function") clearInstituteCache(parseInt(id, 10));
 
         res.status(200).json({
             success: true,
@@ -794,6 +846,7 @@ exports.upgradePlan = async (req, res) => {
             current_feature_auto_attendance: newPlan.feature_auto_attendance,
             current_feature_fees: newPlan.feature_fees,
             current_feature_finance: newPlan.feature_finance,
+            current_feature_expenses: newPlan.feature_expenses || false,
             current_feature_salary: newPlan.feature_salary,
             current_feature_reports: newPlan.feature_reports,
             current_feature_announcements: newPlan.feature_announcements,
@@ -805,7 +858,15 @@ exports.upgradePlan = async (req, res) => {
             current_feature_api_access: newPlan.feature_api_access,
             current_feature_public_page: newPlan.feature_public_page,
             current_feature_assignment: newPlan.feature_assignment || false,
+            current_feature_performance_hub: newPlan.feature_performance_hub || false,
             current_feature_transport: newPlan.feature_transport || false,
+            current_feature_mobile_app: newPlan.feature_mobile_app || false,
+            current_feature_chat: newPlan.feature_chat || false,
+            current_feature_push_notifications: newPlan.feature_push_notifications || false,
+            current_feature_offline_attendance: newPlan.feature_offline_attendance || false,
+            current_feature_parent_app: newPlan.feature_parent_app || false,
+            current_feature_student_app: newPlan.feature_student_app || false,
+            current_limit_chat_messages: newPlan.max_chat_messages || 500,
             
             // Sync lifetime flags
             is_lifetime_member: newPlan.is_lifetime || false,

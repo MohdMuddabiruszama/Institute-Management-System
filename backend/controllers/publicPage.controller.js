@@ -38,7 +38,7 @@ function generateSlug(name) {
     return name
         .toLowerCase()
         .trim()
-        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/[^a-z0-9\s.-]/g, '')
         .replace(/\s+/g, '-')
         .replace(/-+/g, '-')
         .substring(0, 80);
@@ -58,6 +58,26 @@ async function getUniqueSlug(name, excludeId = null) {
     }
 }
 
+// ── Check Subdomain Availability ───────────────────────────────
+exports.checkSubdomainAvailability = async (req, res) => {
+    try {
+        const { subdomain } = req.query;
+        if (!subdomain || !/^[a-z0-9-.]+$/.test(subdomain)) {
+            return res.json({ success: true, data: { available: false, reason: 'Invalid format' } });
+        }
+        
+        const RESERVED = ['www','app','api','admin','mail','support','help','blog', 'staging'];
+        if (RESERVED.includes(subdomain.toLowerCase())) {
+            return res.json({ success: true, data: { available: false, reason: 'Reserved' } });
+        }
+
+        const existing = await InstitutePublicProfile.findOne({ where: { slug: subdomain } });
+        return res.json({ success: true, data: { available: !existing } });
+    } catch (e) {
+        return res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
 // ─────────────────────────────────────────────────────────────────
 // GET /api/admin/public-page  — Get current public page data
 // ─────────────────────────────────────────────────────────────────
@@ -73,7 +93,10 @@ exports.getPublicPage = async (req, res) => {
             return res.json({ success: true, data: null, message: "No public page created yet" });
         }
 
-        const [gallery, reviews, enquiryCount] = await Promise.all([
+        const currentUser = await User.findByPk(req.user.id, { attributes: ['last_enquiry_seen_at'] });
+        const lastEnquirySeenAt = currentUser?.last_enquiry_seen_at || new Date(0);
+
+        const [gallery, reviews, newEnquiryCount, totalEnquiryCount] = await Promise.all([
             InstituteGalleryPhoto.findAll({
                 where: { institute_id: instituteId },
                 order: [['sort_order', 'ASC'], ['created_at', 'ASC']]
@@ -83,7 +106,10 @@ exports.getPublicPage = async (req, res) => {
                 order: [['sort_order', 'ASC'], ['created_at', 'DESC']]
             }),
             PublicEnquiry.count({
-                where: { institute_id: instituteId, status: 'new' }
+                where: { institute_id: instituteId, created_at: { [Op.gt]: lastEnquirySeenAt } }
+            }),
+            PublicEnquiry.count({
+                where: { institute_id: instituteId }
             })
         ]);
 
@@ -107,7 +133,8 @@ exports.getPublicPage = async (req, res) => {
                 ...profileJson,
                 gallery,
                 reviews,
-                new_enquiry_count: enquiryCount
+                new_enquiry_count: newEnquiryCount,
+                total_enquiries: totalEnquiryCount
             }
         });
     } catch (error) {

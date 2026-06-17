@@ -36,6 +36,7 @@ const getPlanSnapshot = (plan, billingCycle = "monthly") => ({
     current_limit_branches: plan.max_branches,
     current_limit_storage_mb: plan.max_storage_mb,
     current_limit_ai_messages: plan.max_ai_messages,
+    current_limit_chat_messages: plan.max_chat_messages,
     current_feature_attendance: plan.feature_attendance,
     current_feature_auto_attendance: plan.feature_auto_attendance,
     current_feature_fees: plan.feature_fees,
@@ -115,8 +116,8 @@ exports.initiatePayment = async (req, res) => {
         // Calculate amount for paid plans
         const amount = getPlanAmountForCycle(plan, billingCycle);
         
-        // Let's add GST 18% as per docs
-        const tax_amount = amount * 0.18;
+        // Apply GST @ 2%
+        const tax_amount = amount * 0.02;
         const total = amount + tax_amount;
 
         let orderInfo;
@@ -216,7 +217,7 @@ exports.verifyPayment = async (req, res) => {
             durationMonths = 12;
         }
 
-        const tax_amount = amount * 0.18;
+        const tax_amount = amount * 0.02;
         const final_paid = amount + tax_amount;
 
         const startDate = new Date();
@@ -228,6 +229,14 @@ exports.verifyPayment = async (req, res) => {
 
         // Generate Invoice Number
         const invoiceNumber = `INV-${new Date().getFullYear()}-${instituteId}-${String(Date.now()).slice(-4)}`;
+
+        // Clean up any old pending or failed subscriptions for this institute to prevent duplicate records showing in the UI
+        await Subscription.destroy({
+            where: {
+                institute_id: instituteId,
+                payment_status: ['pending', 'failed']
+            }
+        });
 
         const subscription = await Subscription.create({
             institute_id: instituteId,
@@ -307,6 +316,69 @@ exports.verifyPayment = async (req, res) => {
 
     } catch (error) {
         console.error("Payment verification error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Record Payment Failure
+ */
+exports.verifyFailure = async (req, res) => {
+    try {
+        const { razorpay_order_id, planId, billingCycle, error_description } = req.body;
+        const instituteId = req.user.institute_id;
+        
+        // Find order
+        const order = await RazorpayOrder.findOne({ where: { razorpay_order_id } });
+        if (order) {
+            await order.update({ 
+                status: 'failed', 
+                notes: { ...(order.notes || {}), error: error_description } 
+            });
+        }
+
+        const plan = await Plan.findByPk(planId);
+        if (!plan) return res.status(404).json({ success: false, message: 'Plan not found' });
+
+        const amount = getPlanAmountForCycle(plan, billingCycle);
+        const tax_amount = amount * 0.02;
+        const final_paid = amount + tax_amount;
+
+        // Clean up any existing pending/failed subscriptions to avoid duplicates
+        await Subscription.destroy({
+            where: {
+                institute_id: instituteId,
+                payment_status: ['pending', 'failed']
+            }
+        });
+
+        // Generate Invoice Number for reference (even if failed)
+        const invoiceNumber = `INV-${new Date().getFullYear()}-${instituteId}-${String(Date.now()).slice(-4)}`;
+
+        await Subscription.create({
+            institute_id: instituteId,
+            plan_id: planId,
+            start_date: new Date(),
+            end_date: new Date(),
+            billing_cycle: billingCycle || "monthly",
+            platform_type: plan.platform_type,
+            status: "failed",
+            payment_status: "failed",
+            transaction_reference: "failed",
+            amount_paid: final_paid,
+            razorpay_order_id,
+            invoice_number: invoiceNumber,
+            tax_amount: tax_amount,
+            paid_at: null
+        });
+
+        res.json({
+            success: true,
+            message: "Payment failure recorded successfully"
+        });
+
+    } catch (error) {
+        console.error("Payment failure recording error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

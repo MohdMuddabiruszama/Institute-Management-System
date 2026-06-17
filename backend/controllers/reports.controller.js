@@ -173,7 +173,7 @@ exports.getAttendanceReport = async (req, res) => {
  */
 exports.getFeesReport = async (req, res) => {
     try {
-        const { start_date, end_date, class_id } = req.query;
+        const { start_date, end_date, class_id, fee_type } = req.query;
         const institute_id = req.user.institute_id;
 
         // Validate date range and plan limits
@@ -218,40 +218,96 @@ exports.getFeesReport = async (req, res) => {
             });
         }
 
+        const { StudentFee, FeesStructure } = require('../models');
+
+        const paymentIncludes = [
+            {
+                model: Student,
+                attributes: ['id', 'roll_number'],
+                include: studentInclude,
+                required: class_id ? true : undefined
+            }
+        ];
+
+        const feeStructureWhere = {};
+        if (fee_type) {
+            feeStructureWhere.fee_type = { [Op.like]: `%${fee_type}%` };
+        }
+
+        paymentIncludes.push({
+            model: FeesStructure,
+            attributes: ['fee_type'],
+            where: Object.keys(feeStructureWhere).length > 0 ? feeStructureWhere : undefined,
+            required: fee_type ? true : false
+        });
+
         const payments = await Payment.findAll({
             where: whereClause,
-            include: [
-                {
-                    model: Student,
-                    attributes: ['id', 'roll_number'],
-                    include: studentInclude,
-                    required: class_id ? true : undefined
-                }
-            ],
+            include: paymentIncludes,
             order: [['payment_date', 'DESC']]
         });
 
         // Calculate totals
         const totalCollected = payments.reduce((sum, p) => sum + parseFloat(p.amount_paid), 0);
+        const studentsWithPayments = payments.map(p => p.student_id);
 
-        // Get all students for pending calculation
-        const allStudentsInclude = [{ model: User, attributes: ['name'] }];
+        // Calculate totals
+        
+        const pendingWhere = { institute_id, status: { [Op.ne]: 'paid' }, due_amount: { [Op.gt]: 0 } };
         if (class_id) {
-            allStudentsInclude.push({
-                model: Class,
-                attributes: [],
-                where: { id: class_id }
-            });
+            pendingWhere.class_id = class_id;
         }
 
-        const allStudents = await Student.findAll({
-            where: { institute_id },
-            include: allStudentsInclude
+        const pendingFees = await StudentFee.findAll({
+            where: pendingWhere,
+            include: [
+                {
+                    model: Student,
+                    attributes: ['id', 'roll_number'],
+                    include: [{ model: User, attributes: ['name'] }],
+                    required: true
+                },
+                {
+                    model: FeesStructure,
+                    attributes: ['fee_type', 'due_date'],
+                    where: Object.keys(feeStructureWhere).length > 0 ? feeStructureWhere : undefined,
+                    required: fee_type ? true : false
+                }
+            ],
+            order: [[{ model: FeesStructure }, 'due_date', 'ASC']]
         });
 
-        // Calculate pending fees (simplified - assumes fixed fee structure)
-        const studentsWithPayments = payments.map(p => p.student_id);
-        const studentsWithoutPayment = allStudents.filter(s => !studentsWithPayments.includes(s.id));
+        const uniquePendingStudentsCount = new Set(pendingFees.map(pf => pf.student_id)).size;
+
+        // Generate Daily Trend Data
+        let trendData = [];
+        const endDateObj = end_date ? new Date(end_date) : new Date();
+        const startDateObj = start_date ? new Date(start_date) : new Date(endDateObj.getTime() - 30 * 24 * 60 * 60 * 1000);
+        
+        const dateMap = {};
+        for(let d = new Date(startDateObj); d <= endDateObj; d.setDate(d.getDate() + 1)) {
+            const dStr = d.toISOString().split('T')[0];
+            const shortName = d.toLocaleString('en-US', { month: 'short', day: 'numeric' });
+            dateMap[dStr] = { name: shortName, Collected: 0, Pending: 0 };
+        }
+        
+        payments.forEach(p => {
+            const dStr = p.payment_date;
+            if(dateMap[dStr]) {
+                dateMap[dStr].Collected += parseFloat(p.amount_paid);
+            }
+        });
+        
+        pendingFees.forEach(pf => {
+            if(pf.FeesStructure && pf.FeesStructure.due_date) {
+                const dStr = pf.FeesStructure.due_date;
+                if(dateMap[dStr]) {
+                    dateMap[dStr].Pending += parseFloat(pf.due_amount);
+                }
+            }
+        });
+        
+        trendData = Object.values(dateMap);
 
         res.status(200).json({
             success: true,
@@ -260,13 +316,18 @@ exports.getFeesReport = async (req, res) => {
                     total_collected: totalCollected.toFixed(2),
                     total_payments: payments.length,
                     students_paid: new Set(studentsWithPayments).size,
-                    students_pending: studentsWithoutPayment.length
+                    students_pending: uniquePendingStudentsCount
                 },
+                trend: trendData,
                 payments,
-                pending_students: studentsWithoutPayment.map(s => ({
-                    student_id: s.id,
-                    roll_number: s.roll_number,
-                    name: s.User?.name
+                pending_students: pendingFees.map(pf => ({
+                    student_id: pf.Student.id,
+                    roll_number: pf.Student.roll_number,
+                    name: pf.Student.User?.name,
+                    pending_amount: pf.due_amount,
+                    due_date: pf.FeesStructure?.due_date,
+                    fee_type: pf.FeesStructure?.fee_type || 'General Fee',
+                    reminder_date: pf.reminder_date
                 })),
                 filters: { start_date, end_date, class_id }
             }
@@ -306,13 +367,32 @@ exports.getStudentPerformanceReport = async (req, res) => {
             });
         }
 
-        // Get attendance summary
+        // Get attendance summary using distinct dates
         const attendanceRecords = await Attendance.findAll({
             where: { student_id, institute_id }
         });
-        const totalDays = attendanceRecords.length;
-        const presentDays = attendanceRecords.filter(r => r.status === 'present').length;
-        const attendancePercentage = totalDays > 0 ? ((presentDays / totalDays) * 100).toFixed(2) : 0;
+        
+        const uniqueDatesMap = {};
+        attendanceRecords.forEach(r => {
+            if (!uniqueDatesMap[r.date]) uniqueDatesMap[r.date] = [];
+            uniqueDatesMap[r.date].push(r.status);
+        });
+
+        let totalDays = 0, presentDays = 0, absentDays = 0, lateDays = 0;
+        Object.values(uniqueDatesMap).forEach(statuses => {
+            if (!statuses.includes('holiday')) {
+                totalDays++;
+                if (statuses.includes('present') || statuses.includes('half_day')) {
+                    presentDays++;
+                } else if (statuses.includes('late')) {
+                    lateDays++;
+                } else if (statuses.includes('absent')) {
+                    absentDays++;
+                }
+            }
+        });
+
+        const attendancePercentage = totalDays > 0 ? (((presentDays + lateDays) / totalDays) * 100).toFixed(2) : 0;
 
         // Get payment history
         const payments = await Payment.findAll({
@@ -335,8 +415,8 @@ exports.getStudentPerformanceReport = async (req, res) => {
                 attendance: {
                     total_days: totalDays,
                     present_days: presentDays,
-                    absent_days: attendanceRecords.filter(r => r.status === 'absent').length,
-                    late_days: attendanceRecords.filter(r => r.status === 'late').length,
+                    absent_days: absentDays,
+                    late_days: lateDays,
                     percentage: parseFloat(attendancePercentage)
                 },
                 fees: {
@@ -388,9 +468,26 @@ exports.getClassPerformanceReport = async (req, res) => {
             const records = await Attendance.findAll({
                 where: { student_id: student.id, class_id, institute_id }
             });
-            const total = records.length;
-            const present = records.filter(r => r.status === 'present').length;
-            const percentage = total > 0 ? ((present / total) * 100).toFixed(2) : 0;
+            
+            const uniqueDatesMap = {};
+            records.forEach(r => {
+                if (!uniqueDatesMap[r.date]) uniqueDatesMap[r.date] = [];
+                uniqueDatesMap[r.date].push(r.status);
+            });
+
+            let total = 0, present = 0, late = 0;
+            Object.values(uniqueDatesMap).forEach(statuses => {
+                if (!statuses.includes('holiday')) {
+                    total++;
+                    if (statuses.includes('present') || statuses.includes('half_day')) {
+                        present++;
+                    } else if (statuses.includes('late')) {
+                        late++;
+                    }
+                }
+            });
+
+            const percentage = total > 0 ? (((present + late) / total) * 100).toFixed(2) : 0;
 
             return {
                 student_id: student.id,

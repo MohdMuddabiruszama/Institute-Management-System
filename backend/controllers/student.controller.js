@@ -225,13 +225,14 @@ exports.createStudent = async (req, res) => {
  */
 exports.getAllStudents = async (req, res) => {
     try {
-        const { page = 1, limit = 10, search = "", class_id } = req.query;
+        const { page = 1, limit = 10, search = "", class_id, cursor } = req.query;
         const institute_id = req.user.institute_id;
-
-        const offset = (page - 1) * limit;
+        const parsedLimit = Math.min(parseInt(limit, 10) || 10, 100);
+        const offset = (parseInt(page, 10) - 1) * parsedLimit;
 
         // Build where clause
         const whereClause = { institute_id };
+        if (cursor) whereClause.id = { [Op.lt]: cursor };
 
         // Search filter
         const userWhereClause = search
@@ -271,10 +272,9 @@ exports.getAllStudents = async (req, res) => {
             }
         }
 
-        const { count, rows } = await Student.findAndCountAll({
+        const queryOptions = {
             where: whereClause,
-            limit: parseInt(limit),
-            offset: parseInt(offset),
+            limit: cursor ? parsedLimit + 1 : parsedLimit,
             order: [["id", "DESC"]],
             include: [
                 {
@@ -289,7 +289,26 @@ exports.getAllStudents = async (req, res) => {
                 subjectIncludeOptions
             ],
             distinct: true,
-        });
+        };
+
+        if (!cursor) queryOptions.offset = parseInt(offset, 10);
+
+        if (cursor) {
+            const rows = await Student.findAll(queryOptions);
+            const hasMore = rows.length > parsedLimit;
+            const data = hasMore ? rows.slice(0, parsedLimit) : rows;
+
+            return res.status(200).json({
+                success: true,
+                message: "Students retrieved successfully",
+                data,
+                count: data.length,
+                nextCursor: hasMore && data.length ? data[data.length - 1].id : null,
+                hasMore,
+            });
+        }
+
+        const { count, rows } = await Student.findAndCountAll(queryOptions);
 
         res.status(200).json({
             success: true,
@@ -331,7 +350,15 @@ exports.getMe = async (req, res) => {
                 {
                     model: Subject,
                     attributes: ["id", "name"],
-                    through: { attributes: [] }
+                    through: { attributes: [] },
+                    include: [{
+                        model: Faculty,
+                        attributes: ["id", "user_id"],
+                        include: [{
+                            model: User,
+                            attributes: ["name"]
+                        }]
+                    }]
                 },
                 {
                     model: User,
@@ -354,7 +381,15 @@ exports.getMe = async (req, res) => {
             const classIds = responseData.Classes.map(c => c.id);
             const allSubjects = await Subject.findAll({
                 where: { institute_id, class_id: { [Op.in]: classIds } },
-                attributes: ["id", "name"]
+                attributes: ["id", "name"],
+                include: [{
+                    model: Faculty,
+                    attributes: ["id", "user_id"],
+                    include: [{
+                        model: User,
+                        attributes: ["name"]
+                    }]
+                }]
             });
 
             const existingSubIds = new Set((responseData.Subjects || []).map(s => s.id));
@@ -382,7 +417,7 @@ exports.getStudentLookup = async (req, res) => {
     try {
         const institute_id = req.user.institute_id;
         const { class_id, search = "", limit = 100 } = req.query;
-        const maxLimit = Math.min(parseInt(limit, 10) || 100, 200);
+        const maxLimit = Math.min(parseInt(limit, 10) || 100, 5000);
 
         const userWhereClause = search
             ? {
@@ -453,7 +488,15 @@ exports.getStudentById = async (req, res) => {
                 {
                     model: Subject,
                     attributes: ["id", "name"],
-                    through: { attributes: [] }
+                    through: { attributes: [] },
+                    include: [{
+                        model: Faculty,
+                        attributes: ["id", "user_id"],
+                        include: [{
+                            model: User,
+                            attributes: ["name"]
+                        }]
+                    }]
                 },
                 {
                     model: User,
@@ -484,7 +527,15 @@ exports.getStudentById = async (req, res) => {
             const classIds = responseData.Classes.map(c => c.id);
             const allSubjects = await Subject.findAll({
                 where: { institute_id, class_id: { [Op.in]: classIds } },
-                attributes: ["id", "name"]
+                attributes: ["id", "name"],
+                include: [{
+                    model: Faculty,
+                    attributes: ["id", "user_id"],
+                    include: [{
+                        model: User,
+                        attributes: ["name"]
+                    }]
+                }]
             });
 
             const existingSubIds = new Set((responseData.Subjects || []).map(s => s.id));
@@ -677,6 +728,60 @@ exports.deleteStudent = async (req, res) => {
 };
 
 /**
+ * Delete multiple students
+ * @route POST /api/students/bulk-delete
+ * @access Admin only
+ */
+exports.bulkDeleteStudents = async (req, res) => {
+    let transaction;
+    try {
+        const { student_ids } = req.body;
+        const institute_id = req.user.institute_id;
+
+        if (!student_ids || !Array.isArray(student_ids) || student_ids.length === 0) {
+            return res.status(400).json({ success: false, message: "No students selected for deletion" });
+        }
+
+        transaction = await sequelize.transaction();
+
+        const students = await Student.findAll({
+            where: { id: { [Op.in]: student_ids }, institute_id },
+            include: [{ model: User }],
+            transaction
+        });
+
+        if (students.length === 0) {
+            await transaction.rollback();
+            return res.status(404).json({ success: false, message: "No valid students found to delete" });
+        }
+
+        const userIds = students.map(s => s.user_id).filter(id => id);
+        const studentIdsToDelete = students.map(s => s.id);
+
+        if (userIds.length > 0) {
+            await User.destroy({ where: { id: { [Op.in]: userIds }, institute_id }, transaction });
+        }
+        
+        if (studentIdsToDelete.length > 0) {
+            await Student.destroy({ where: { id: { [Op.in]: studentIdsToDelete }, institute_id }, transaction });
+        }
+
+        await transaction.commit();
+
+        res.status(200).json({
+            success: true,
+            message: `${students.length} student(s) deleted successfully`,
+        });
+    } catch (error) {
+        if (transaction) await transaction.rollback();
+        res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};
+
+/**
  * Get student statistics
  * @route GET /api/students/stats
  * @access Admin, Faculty
@@ -685,29 +790,18 @@ exports.getStudentStats = async (req, res) => {
     try {
         const institute_id = req.user.institute_id;
 
-        const totalStudents = await Student.count({
-            where: { institute_id },
-        });
-
-        const activeStudents = await Student.count({
-            where: { institute_id },
-            include: [
-                {
-                    model: User,
-                    where: { status: "active" },
-                },
-            ],
-        });
-
-        const blockedStudents = await Student.count({
-            where: { institute_id },
-            include: [
-                {
-                    model: User,
-                    where: { status: "blocked" },
-                },
-            ],
-        });
+        // ✅ Phase A Bonus: Run all 3 counts in parallel (was serial — 3x faster)
+        const [totalStudents, activeStudents, blockedStudents] = await Promise.all([
+            Student.count({ where: { institute_id } }),
+            Student.count({
+                where: { institute_id },
+                include: [{ model: User, where: { status: "active" } }],
+            }),
+            Student.count({
+                where: { institute_id },
+                include: [{ model: User, where: { status: "blocked" } }],
+            }),
+        ]);
 
         res.status(200).json({
             success: true,
@@ -878,6 +972,125 @@ exports.getStudentCredentials = async (req, res) => {
 
     } catch (error) {
         console.error('getStudentCredentials error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Get student dashboard statistics (unread assignments, notes)
+ * @route GET /api/students/dashboard-stats
+ * @access Student
+ */
+exports.getDashboardStats = async (req, res) => {
+    try {
+        const institute_id = req.user.institute_id;
+        const user_id = req.user.id;
+
+        const { Student, Class, Subject } = require("../models");
+        const student = await Student.findOne({
+            where: { user_id, institute_id },
+            include: [
+                { model: Class, through: { attributes: [] } },
+                { model: Subject, through: { attributes: [] } }
+            ]
+        });
+
+        if (!student) {
+            return res.status(404).json({ success: false, message: "Student record not found" });
+        }
+
+        const classIds = student.Classes ? student.Classes.map(c => c.id) : [];
+        const subjectIds = student.Subjects ? student.Subjects.map(s => s.id) : [];
+
+        const { Assignment, Note, User } = require("../models");
+        const { Op } = require("sequelize");
+
+        const dbUser = await User.findByPk(user_id, {
+            attributes: ['last_assignment_seen_at', 'last_note_seen_at']
+        });
+
+        // Calculate unread assignments
+        let assignmentWhere = { institute_id, status: { [Op.in]: ['published', 'closed'] } };
+        if (dbUser && dbUser.last_assignment_seen_at) {
+            assignmentWhere.created_at = { [Op.gt]: dbUser.last_assignment_seen_at };
+        }
+        
+        let assignmentOr = [];
+        if (classIds.length > 0) assignmentOr.push({ class_id: { [Op.in]: classIds } });
+        if (!student.is_full_course && subjectIds.length > 0) assignmentOr.push({ subject_id: { [Op.in]: subjectIds } });
+        
+        if (assignmentOr.length > 0) {
+            assignmentWhere[Op.or] = assignmentOr;
+        } else {
+            // No classes or subjects assigned
+            assignmentWhere.id = null; // force 0
+        }
+
+        // Build noteWhere filter before running both counts in parallel
+        let noteWhere = { institute_id };
+        if (dbUser && dbUser.last_note_seen_at) {
+            noteWhere.created_at = { [Op.gt]: dbUser.last_note_seen_at };
+        }
+        let noteOr = [];
+        if (classIds.length > 0) noteOr.push({ class_id: { [Op.in]: classIds } });
+        if (subjectIds.length > 0) noteOr.push({ subject_id: { [Op.in]: subjectIds } });
+        if (noteOr.length > 0) {
+            noteWhere[Op.or] = noteOr;
+        } else {
+            noteWhere.id = null; // force 0
+        }
+
+        // ✅ Phase A Bonus: Run both counts in parallel (was serial — 2x faster)
+        const [unreadAssignmentCount, unreadNotesCount] = await Promise.all([
+            Assignment.count({ where: assignmentWhere }),
+            Note.count({ where: noteWhere }),
+        ]);
+
+        res.status(200).json({
+            success: true,
+            unreadAssignmentCount,
+            unreadNotesCount
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Clear unread assignments
+ */
+exports.clearUnreadAssignments = async (req, res) => {
+    try {
+        const { User } = require("../models");
+        await User.update({ last_assignment_seen_at: new Date() }, { where: { id: req.user.id } });
+        res.status(200).json({ success: true, message: "Cleared unread assignments count" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Clear unread notes
+ */
+exports.clearUnreadNotes = async (req, res) => {
+    try {
+        const { User } = require("../models");
+        await User.update({ last_note_seen_at: new Date() }, { where: { id: req.user.id } });
+        res.status(200).json({ success: true, message: "Cleared unread notes count" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Clear unread chats for student (marks all chat rooms as read)
+ */
+exports.clearUnreadChats = async (req, res) => {
+    try {
+        const { ChatParticipant } = require("../models");
+        await ChatParticipant.update({ last_read_at: new Date() }, { where: { user_id: req.user.id } });
+        res.status(200).json({ success: true, message: "Cleared unread chats count" });
+    } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };

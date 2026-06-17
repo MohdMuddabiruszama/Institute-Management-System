@@ -11,14 +11,14 @@ import { validateRows } from '../utils/bulkValidation';
 
 // Required columns per type — used to detect missing header columns
 const REQUIRED_HEADERS = {
-  students: ['name', 'email', 'phone', 'roll_number', 'class_name', 'gender', 'date_of_birth', 'admission_date', 'address'],
+  students: ['name', 'email', 'phone', 'roll_number', 'class_name', 'section', 'gender', 'date_of_birth', 'admission_date', 'address', 'is_full_course', 'subjects'],
   parents:  ['name', 'email', 'phone', 'student_roll_number', 'relationship'],
   faculty:  ['name', 'email', 'phone'],
 };
 
 const LABEL_MAP = { students: 'Students', parents: 'Parents', faculty: 'Faculty' };
 
-export default function BulkImportButton({ type, onSuccess }) {
+export default function BulkImportButton({ type, onSuccess, customButton, label, className, style }) {
   const fileRef  = useRef();
   const [showMenu, setShowMenu] = useState(false);
   const [modalData, setModalData] = useState(null);
@@ -27,7 +27,7 @@ export default function BulkImportButton({ type, onSuccess }) {
     // Generate dummy row for guidance
     let dummyRow = {};
     if (type === 'students') {
-      dummyRow = { name: 'John Doe', email: 'john@example.com', phone: '9876543210', roll_number: '101', class_name: 'Class 10', gender: 'male', date_of_birth: '15/08/2005', admission_date: '02/05/2026', address: '123 Main Street' };
+      dummyRow = { name: 'John Doe', email: 'john@example.com', phone: '9876543210', roll_number: '101', class_name: 'Class 10', section: 'A', gender: 'male', date_of_birth: '15/08/2005', admission_date: '02/05/2026', address: '123 Main Street', is_full_course: 'Yes', subjects: 'Math, Science' };
     } else if (type === 'parents') {
       dummyRow = { name: 'Jane Doe', email: 'jane@example.com', phone: '9876543210', student_roll_number: '101', relationship: 'mother' };
     } else if (type === 'faculty') {
@@ -119,30 +119,36 @@ export default function BulkImportButton({ type, onSuccess }) {
         style={{ display: 'none' }}
         onChange={handleFile}
       />
-      <button
-        onClick={() => setShowMenu(true)}
-        className="btn btn-sm"
-        style={{
-          background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
-          color: '#fff',
-          border: 'none',
-          borderRadius: '8px',
-          padding: '0.5rem 1rem',
-          fontWeight: 600,
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.4rem',
-          fontSize: '0.875rem',
-          boxShadow: '0 2px 6px rgba(37,99,235,0.35)',
-          transition: 'all 0.2s ease',
-        }}
-        onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-1px)'}
-        onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}
-        title={`Bulk import ${LABEL_MAP[type]}`}
-      >
-        ⬆ Bulk Import
-      </button>
+      {customButton ? (
+        <div onClick={() => setShowMenu(true)} style={{ display: 'inline-block' }}>
+          {customButton}
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowMenu(true)}
+          className={className || "btn btn-sm"}
+          style={style || {
+            background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '8px',
+            padding: '0.5rem 1rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem',
+            fontSize: '0.875rem',
+            boxShadow: '0 2px 6px rgba(37,99,235,0.35)',
+            transition: 'all 0.2s ease',
+          }}
+          onMouseEnter={!style ? (e => e.currentTarget.style.transform = 'translateY(-1px)') : undefined}
+          onMouseLeave={!style ? (e => e.currentTarget.style.transform = 'translateY(0)') : undefined}
+          title={`Bulk import ${LABEL_MAP[type]}`}
+        >
+          {label || '⬆ Bulk Import'}
+        </button>
+      )}
 
       {/* ── Pre-Import Menu Modal ────────────────────────────────────────── */}
       {showMenu && (

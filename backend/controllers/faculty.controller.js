@@ -4,7 +4,7 @@
  * Implements institute-level data isolation
  */
 
-const { Faculty, User, Subject, Institute, Plan, Class } = require("../models");
+const { Faculty, User, Subject, Institute, Plan, Class, StudentClass } = require("../models");
 const { Op } = require("sequelize");
 const { hashPassword } = require("../utils/hashPassword");
 
@@ -99,7 +99,12 @@ exports.createFaculty = async (req, res) => {
         }
 
         // Hash password
-        const password_hash = await hashPassword(password || "faculty123");
+        const { generateTempPassword } = require('../utils/passwordGenerator');
+        const tempPassword = password || generateTempPassword();
+        const password_hash = await hashPassword(tempPassword);
+
+        const temp_password_expires_at = new Date();
+        temp_password_expires_at.setDate(temp_password_expires_at.getDate() + 7);
 
         // Create user account
         const user = await User.create({
@@ -110,6 +115,10 @@ exports.createFaculty = async (req, res) => {
             phone,
             password_hash,
             status: "active",
+            is_first_login: true,
+            temp_password_expires_at,
+            credentials_sent_at: email ? new Date() : null,
+            initial_password: tempPassword
         });
 
         // Create faculty record
@@ -124,6 +133,8 @@ exports.createFaculty = async (req, res) => {
         res.status(201).json({
             success: true,
             message: "Faculty created successfully",
+            showPasswordOnScreen: true,
+            initial_password: tempPassword,
             data: {
                 faculty,
                 user: {
@@ -150,10 +161,10 @@ exports.createFaculty = async (req, res) => {
  */
 exports.getAllFaculty = async (req, res) => {
     try {
-        const { page = 1, limit = 100, search = "" } = req.query;
+        const { page = 1, limit = 100, search = "", cursor } = req.query;
         const institute_id = req.user.institute_id;
-
-        const offset = (page - 1) * limit;
+        const parsedLimit = Math.min(parseInt(limit, 10) || 100, 100);
+        const offset = (parseInt(page, 10) - 1) * parsedLimit;
 
         const userWhereClause = search
             ? {
@@ -164,11 +175,14 @@ exports.getAllFaculty = async (req, res) => {
             }
             : {};
 
-        const { count, rows } = await Faculty.findAndCountAll({
-            where: { institute_id },
-            limit: parseInt(limit),
-            offset: parseInt(offset),
-            order: [["created_at", "DESC"]],
+        const whereClause = { institute_id };
+        if (cursor) whereClause.id = { [Op.lt]: cursor };
+
+        const queryOptions = {
+            where: whereClause,
+            limit: cursor ? parsedLimit + 1 : parsedLimit,
+            order: [["id", "DESC"]],
+            distinct: true, // Fix for correct count with includes
             include: [
                 {
                     model: User,
@@ -188,7 +202,26 @@ exports.getAllFaculty = async (req, res) => {
                     ]
                 },
             ],
-        });
+        };
+
+        if (!cursor) queryOptions.offset = parseInt(offset, 10);
+
+        if (cursor) {
+            const rows = await Faculty.findAll(queryOptions);
+            const hasMore = rows.length > parsedLimit;
+            const data = hasMore ? rows.slice(0, parsedLimit) : rows;
+
+            return res.status(200).json({
+                success: true,
+                message: "Faculty retrieved successfully",
+                data,
+                count: data.length,
+                nextCursor: hasMore && data.length ? data[data.length - 1].id : null,
+                hasMore,
+            });
+        }
+
+        const { count, rows } = await Faculty.findAndCountAll(queryOptions);
 
         res.status(200).json({
             success: true,
@@ -276,6 +309,7 @@ exports.updateFaculty = async (req, res) => {
             designation,
             salary,
             join_date,
+            status,
         } = req.body;
 
         const faculty = await Faculty.findOne({
@@ -298,19 +332,20 @@ exports.updateFaculty = async (req, res) => {
         }
 
         // Update user details
-        if (name || email || phone) {
+        if (name !== undefined || email !== undefined || phone !== undefined || status !== undefined) {
             await faculty.User.update({
-                name: name || faculty.User.name,
-                email: email || faculty.User.email,
-                phone: phone || faculty.User.phone,
+                name: name !== undefined ? name : faculty.User.name,
+                email: email !== undefined ? email : faculty.User.email,
+                phone: phone !== undefined ? phone : faculty.User.phone,
+                status: status !== undefined ? status : faculty.User.status,
             });
         }
 
         // Update faculty details
         await faculty.update({
-            designation: designation || faculty.designation,
-            salary: salary || faculty.salary,
-            join_date: join_date || faculty.join_date,
+            designation: designation !== undefined ? designation : faculty.designation,
+            salary: salary !== undefined ? salary : faculty.salary,
+            join_date: join_date !== undefined ? join_date : faculty.join_date,
         });
 
         res.status(200).json({
@@ -484,6 +519,120 @@ exports.resendFacultyCredentials = async (req, res) => {
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Get dashboard stats for faculty
+ * @route GET /api/faculty/dashboard-stats
+ * @access Faculty
+ */
+exports.getDashboardStats = async (req, res) => {
+    try {
+        const institute_id = req.user.institute_id;
+        const user_id = req.user.id;
+
+        const faculty = await Faculty.findOne({ where: { user_id, institute_id } });
+        if (!faculty) {
+            return res.status(404).json({ success: false, message: "Faculty not found" });
+        }
+
+        const subjects = await Subject.findAll({
+            where: { faculty_id: faculty.id, institute_id }
+        });
+
+        const teachingSubjectsCount = subjects.length;
+        const classIds = [...new Set(subjects.map(s => s.class_id).filter(Boolean))];
+        const classesAssignedCount = classIds.length;
+
+        let totalStudentsCount = 0;
+        if (classIds.length > 0) {
+            totalStudentsCount = await StudentClass.count({
+                where: { class_id: { [Op.in]: classIds } },
+                distinct: true,
+                col: 'student_id'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                teachingSubjectsCount,
+                classesAssignedCount,
+                totalStudentsCount
+            }
+        });
+    } catch (error) {
+        console.error("Dashboard stats error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Bulk delete faculty
+ * @route POST /api/faculty/bulk-delete
+ * @access Admin only
+ */
+exports.bulkDeleteFaculty = async (req, res) => {
+    try {
+        const { faculty_ids } = req.body;
+        const institute_id = req.user.institute_id;
+
+        if (!faculty_ids || !Array.isArray(faculty_ids) || faculty_ids.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Please provide an array of faculty IDs to delete",
+            });
+        }
+
+        const faculties = await Faculty.findAll({
+            where: {
+                id: {
+                    [Op.in]: faculty_ids,
+                },
+                institute_id,
+            },
+        });
+
+        if (faculties.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "No matching faculty found to delete",
+            });
+        }
+
+        const userIds = faculties.map(f => f.user_id);
+
+        // Delete faculty records
+        await Faculty.destroy({
+            where: {
+                id: {
+                    [Op.in]: faculties.map(f => f.id),
+                },
+                institute_id,
+            },
+        });
+
+        // Delete associated user accounts
+        await User.destroy({
+            where: {
+                id: {
+                    [Op.in]: userIds,
+                },
+                institute_id,
+            },
+        });
+
+        res.status(200).json({
+            success: true,
+            message: `Successfully deleted ${faculties.length} faculty members`,
+        });
+    } catch (error) {
+        console.error("Bulk delete faculty error:", error);
+        res.status(500).json({
+            success: false,
+            message: error.message,
+        });
     }
 };
 
